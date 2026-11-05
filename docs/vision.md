@@ -26,6 +26,7 @@ LLM 进入机器人系统之后，几乎所有的"自主"都被折叠进了同�
 | 机制二：语义更新与控制更新的尺度分离 | L1–L4 按时间尺度分层；[contracts/](../contracts/) 定义层间信号 | **已实现（仿真）**：`sim/` 按 100 Hz 控制、L4 异步 |
 | 机制三：grounding 的验证成本 | L2 反射层硬否决权 | **已实现（仿真）**：射线感知触发 `reflex_override` |
 | 第三节"没有独立的稳态层" | L1 内感受/稳态层 | **已实现（仿真）**：电量/温度/接触力 → `homeostatic_broadcast` |
+| 内感受三分（homeostatic / allostatic / enactive） | L1 + L3 | **半实现**：L1 只有 homeostatic，按不确定性前瞻重评估的 allostatic 分支**未做**（[ADR-0004](adr/0004-l1-homeostatic-only.md)） |
 | 第三节"断线即失去降级路径" | L4 把 LLM 定义为外部异步服务 | **已实现并测过**：`--llm-disconnect` 注入后仍能到桩（速度打折） |
 | 第六节 B0 / B0′ / B1 / B2 | [evals/baselines/](../evals/baselines/) | **已接入**（`sim` 直接读 yaml）；但 B0′ 只是脚本航点、不读电量，**能力被低估** |
 | （文章未展开）L3 情绪调制是否必要 | [L3 情感/调制层](architecture.md) | **开放问题**：实测关掉它与全系统差异 ≈0.3 个百分点，没有证据 |

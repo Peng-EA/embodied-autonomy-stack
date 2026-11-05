@@ -131,6 +131,63 @@ REA（Routed Embodied Agent Runtime）则把这个原则提炼成了一条运行
 
 ---
 
+## 八、相关工作
+
+分层不是新想法。1986 年 Brooks 的包容架构（subsumption architecture）就是"把行为按时间尺度堆起来、上层不阻塞下层"；Gat 1998 年的三层架构把反应层、执行层、规划层写成了标准范式。所以本文如果只说"要分层"，没有讨论价值。
+
+真正需要交代的是两件事：**分层有没有实证支撑**，以及 **L1 这一层到底该装什么**。最近有两篇工作（下文记作 [1]、[2]）恰好各回答一半，值得放在最前面。
+
+### 8.1 分层的实证支撑：[1] Hi-VLA 系统研究
+
+Hu 等 2026 年的《What Matters in Orchestrating Robot Policies: A Systematic Study of Hierarchical VLA Agents》（[arXiv:2606.10267](https://arxiv.org/abs/2606.10267)，v2 修订于 2026-09）是目前对这一架构主张最直接的实证参照。它做的事很朴素，但正是缺的那件：把现有多个 Hi-VLA 系统统一到一个 options-style 控制框架下，然后**在同一把尺子上**比较设计选择——planner 与 controller 怎么选、两者之间的切换机制、记忆与观测怎么表示——在短视界、长视界、推理密集三类任务上做系统评估，并在仿真和一个真实 ALOHA 机器人上验证。
+
+它的结论对本文是双向的：
+
+- **支持的一半**：按提炼出的原则配置的层级系统，"substantially stronger than either flat VLA control or a naively designed hierarchy"（摘要原话）。也就是说，分层不是玄学，做对了确实更好——这给"把 L4 与 L1/L2 拆开"提供了实证合法性。
+- **警告的一半**：同一段摘要紧接着说，性能由 "model choices and interface mechanisms **jointly** shape" 决定。**分层本身不自动带来收益，层与层之间的接口设计决定分层是否有效。** 接口没设计好，增益会消失，甚至不如扁平。
+
+第二点对本文比第一点更有用。它说明这里的关键主张不该是"四层比一层好"，而是"**层间的信号契约是荷载所在**"。这正是本仓库 `contracts/` 目录存在的理由——里面的 `homeostatic_broadcast`、`reflex_override`、`semantic_plan_request` 不是文档装饰，而是把"接口"当成一等公民。它同时也是本文最容易被反驳的地方（见 8.3）。
+
+必须说清的边界：该文测的是操作任务的成功率，**没有测断线存活，也没有测稳态维持**。它支持"拆层值得"这一半，但不直接支持本文"LLM 不该在同步控制环中心"的位置主张。把它当第一半的证据，别当第二半的。
+
+### 8.2 L1 该装什么：[2] 内感受框架的三分
+
+本文第五节把 L1 写成"检测设定点偏离，产生全局中断信号"。这句话只覆盖了内感受调节的**一个分支**。
+
+Candia-Rivera 2026 年的《Interoceptive machine framework: Toward interoception-inspired regulatory architectures in artificial intelligence》（[arXiv:2604.24527](https://arxiv.org/abs/2604.24527)，期刊版见 ScienceDirect）是目前把"内感受"翻译成 AI 架构设计原则最系统的一篇。它把内感受调节拆成三个功能原则，每个对应一种计算角色：
+
+| 原则 | 计算角色（原文表述） | 本文 / 仓库的对应 |
+|---|---|---|
+| **homeostatic** | internal viability regulation（维持可行域） | L1 现有实现：电量/温度/应力偏离检测 + 全局广播 |
+| **allostatic** | anticipatory uncertainty-based re-evaluation（按不确定性前瞻性重评估） | **没有**——L1 是纯反应式，偏离发生了才报 |
+| **enactive** | active data generation through interaction（通过交互主动生成数据） | 与 L3 的好奇/探索有重叠，但 L3 目前只调参，不产生"为降低不确定性而行动"的目标 |
+
+这三分把我原来的 L1 描述说薄了，并指出两个具体缺口：
+
+**一、L1 缺 allostatic 分支。** 反应式的"电量 20% 报警"和前瞻式的"按当前耗电方差，再跑 8 分钟会到 20%"是两种不同的东西。后者依赖不确定性估计，在偏离发生**之前**重评估设定点——负载升高时收窄温度容忍区间，而不是等它撞线。这不是事后补的漂亮话：仓库的 L1 至今只有 homeostatic，`homeostatic_broadcast` 契约里也没有任何预测字段。这个缺口已按 ADR 约定记成 [ADR-0004](../adr/0004-l1-homeostatic-only.md)，包括"为什么现在不做"和"什么条件下回来做"。
+
+**二、L1 与 L3 的边界被这三分重划了一次。** enactive 那一格更靠近 L3，说明"内感受"和"动机"的接缝不在我以为的位置；现在的分法能用，但拿不出依据说是对的。
+
+还有一个细节值得记下来：这篇论文自己就写明，这三条 "are not intended as direct neurophysiological mappings, but as abstractions"——借用机制、不做生物等价声明。这与本仓库 ADR-0001「四层是工程隐喻」的立场是同一种自限方式。做架构的人借神经科学的概念时，这句话最好都写在显眼处。
+
+### 8.3 其余工作的位置
+
+| 工作 | 它做了什么 | 与本文的关系 |
+|---|---|---|
+| Figure Helix | S2（7B VLM，7–9 Hz）+ S1（80M，200 Hz），潜在向量通信 | 双系统的工程样板；但优化目标是操作成功率，不测断线 |
+| π0 / RDT-2 | 流匹配 / 扩散生成动作块，50 Hz 动作输出 | 说明"快"可以来自动作生成路径，VLM 主干不必在 50 Hz——机制二的旁证 |
+| Fast-in-Slow | System 1 嵌入 System 2、部分共享参数，chunk=8 时 117.7 Hz | 机制二的直接证据；它自己的动机就写成"VLM 策略 execution frequency 低" |
+| REA | 运行时规则 "no running policy waits on the brain"，LIBERO-Pro 95.9% | 把"不阻塞"写成规则；本文再往前一步：**不阻塞只是底线，还要上游消失时自己活着** |
+| Leap-VLA | 语义变化 ~1 Hz vs 反应控制 20–50 Hz 的尺度分离 | 机制二的直接依据 |
+| Princeton System-1/2 安全自主性 | 语义输出需在真机上被可靠 grounding / 定位 / 执行 | 机制三（grounding 验证成本）的依据 |
+| Brooks 包容架构 / Gat 三层架构 | 反应在上、规划在下的经典分层 | 本文没有新结构，只是把老结构放到 LLM 时代重测一遍 |
+
+**本文相对这些工作的增量只有三条，而且都不大**：（1）把"谁持有抢占权"和"LLM 断线后还能不能活"当成一等评价指标，而不是副作用；（2）L1 的需求生成明确独立于 LLM（多数分层工作里需求来自任务指令）；（3）基线集合里含一个自曝的稻草人——B0 关掉 L1 就等于没有需求来源——并把这个事实写进 ADR，而不是藏起来。
+
+**最容易被反驳的一点（我认为最该被反驳的一点）**：如果 [1] 的结论成立——分层收益由接口设计决定——那么本文的全部荷载都压在 L1→L4 的 `homeostatic_broadcast` 契约上。而那份契约现在仍是草案，也只在单障碍物、单速度档的仿真里跑过。换句话说：**我论证了分层值得做，但没有证明我的接口设计是对的。** 要打这个点，改 `contracts/` 里一条语义、看基线对比会不会崩，比再写一节"相关工作"有用得多。
+
+---
+
 ## 附录：本文引用的主要数字与核实状态
 
 | 数字/陈述 | 条件 | 来源 | 核实 |
@@ -145,8 +202,11 @@ REA（Routed Embodied Agent Runtime）则把这个原则提炼成了一条运行
 | Fast-in-Slow：117.7 Hz（chunk=8），仿真 +8% / 真机 +11% | RTX 4090 / NeurIPS 2025 | [Fast-in-Slow, arXiv:2506.01953](https://ar5iv.labs.arxiv.org/html/2506.01953) | **已核实** |
 | REA：95.9%，步数 −25%，时间 −17%，"no running policy waits on the brain" | LIBERO-Pro，3000 回合 | [REA, arXiv:2610.42053](https://export.arxiv.org/abs/2610.42053) | **已核实** |
 | ICD 定义（Inference–Control Discrepancy） | — | Perceptual Compute Offloading (2026) | 待核实 |
+| Hi-VLA：统一 options-style 框架下系统评估；良好接口的层级"substantially stronger than flat VLA or naively designed hierarchy"；增益由 "model choices and interface mechanisms jointly" 决定 | 仿真 + 真实 ALOHA；短/长视界 + 推理密集三类任务 | [Hi-VLA, arXiv:2606.10267](https://arxiv.org/abs/2606.10267) | **已核实**（摘要 + 作者列表） |
+| 内感受三分：homeostatic（生存性调节）/ allostatic（不确定性前瞻重评估）/ enactive（交互中主动生成数据）；作者自述为抽象而非神经映射 | 综述性框架 | [arXiv:2604.24527](https://arxiv.org/abs/2604.24527)；期刊版 [ScienceDirect](https://www.sciencedirect.com/science/article/pii/S1571064526000461) | **已核实**（摘要） |
 
-> 核实说明：标「已核实」的三条，作者已对照原文（摘要 / 正文表格）确认数字与表述。
+> 核实说明：标「已核实」的五条，作者已对照原文（摘要 / 正文表格）确认数字与表述。
+> 其中两条内感受 / Hi-VLA 条目只核到摘要层面，**正文里的方法细节与实验规模未逐条核对**。
 > 其余条目尚未逐条对照原文，**正式发布前应补全 arXiv 编号或可访问 URL**——尤其
 > Perceptual Compute Offloading 这一来源同时支撑"接触丰富 500–1000 Hz"与"高层 10–50 Hz"
 > 两个关键界定，读者需要能独立复核。

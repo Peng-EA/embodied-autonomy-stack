@@ -28,3 +28,6 @@
 | **阶段 1 / 阶段 2** | 阶段 1 解决自身需求；阶段 2 发现并解决程序外需求。见 [roadmap.md](roadmap.md) |
 | **ADR** | Architecture Decision Record，架构决策记录：把争论的结论落成可引用的文档 |
 | **四层神经系统** | 工程隐喻。借神经科学的分层概念组织时间尺度与职责边界，**不是**生物等价声明 |
+| **内感受（interoception）** | 对内部状态信号的监测、整合与调节；本项目 L1 是它的工程化实现，且只实现其中一支 |
+| **homeostatic / allostatic / enactive** | 内感受调节的三条功能原则：维持可行域 / 按不确定性前瞻重评估设定点 / 通过交互主动生成数据（Candia-Rivera 2026, [arXiv:2604.24527](https://arxiv.org/abs/2604.24527)）。**本项目只实现第一条** |
+| **allostatic 分支** | L1 目前缺的那一半：在偏离发生前、按预测误差调整设定点与容忍区间。未实现，理由见 [ADR-0004](adr/0004-l1-homeostatic-only.md) |
