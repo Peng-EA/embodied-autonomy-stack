@@ -1,0 +1,14 @@
+# 生成物 / 临时文件
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.log
+
+# 平台杂项
+.DS_Store
+Thumbs.db
+
+# 仿真输出（后续 v0.1 demo 用）
+runs/
+logs/
