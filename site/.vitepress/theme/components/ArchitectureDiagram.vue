@@ -51,7 +51,7 @@ const layers = [
       <span class="ea-layer-name">{{ l.name }}</span>
       <span class="ea-layer-ts">{{ l.ts }}</span>
       <span class="ea-layer-io">{{ l.io }}</span>
-      <span class="ea-layer-go">→</span>
+      <span class="ea-layer-go">↗</span>
     </a>
   </div>
 </template>

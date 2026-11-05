@@ -48,9 +48,8 @@ jobs:
       - name: Build
         working-directory: site
         run: pnpm run docs:build
-        env:
-          # Project Pages 部署在 /<repo>/ 子路径下，base 必须是子路径
-          EA_BASE: /embodied-autonomy-stack/
+        # 自定义域名 pjtbot.xyz 在根路径 → 不设 EA_BASE，base 就是 '/'
+        # 如需退回 github.io/<repo>/，在这里加 EA_BASE: /embodied-autonomy-stack/
 
       - uses: actions/configure-pages@v5
 

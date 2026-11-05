@@ -5,8 +5,9 @@
   "description": "Embodied Autonomy Stack 文档站（VitePress）",
   "type": "module",
   "scripts": {
-    "docs:dev": "vitepress dev .",
-    "docs:build": "vitepress build .",
+    "docs:sync": "node scripts/sync-docs.mjs",
+    "docs:dev": "node scripts/sync-docs.mjs && vitepress dev .",
+    "docs:build": "node scripts/sync-docs.mjs && vitepress build . && node scripts/postbuild-pages.mjs",
     "docs:preview": "vitepress preview ."
   },
   "devDependencies": {

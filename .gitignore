@@ -18,3 +18,14 @@ site/node_modules/
 site/.vitepress/cache/
 site/.vitepress/dist/
 *.local
+
+# 文档站：由 docs/ 同步生成的页面与图片资源（不要手改这些）
+site/guide.md
+site/vision.md
+site/architecture.md
+site/interfaces.md
+site/evaluation.md
+site/safety.md
+site/roadmap.md
+site/glossary.md
+site/public/assets/

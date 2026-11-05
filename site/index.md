@@ -26,22 +26,22 @@ L1 说"我饿了" → L3 说"那我现在想去找吃的" → L4 说"路径这�
   <strong>表中是预期方向，不是实测值。</strong>
   本项目 v0.1 没有可运行代码，任何把预期写成实测的文档都算数据造假。
   指标的分子、分母与通过线定义见
-  <a href="https://github.com/Peng-EA/embodied-autonomy-stack/blob/main/docs/evaluation.md" target="_blank" rel="noreferrer">docs/evaluation.md</a>。
+  <a href="/evaluation">docs/evaluation.md</a>。
 </div>
 
 ## // 起点
 
 <div class="ea-links">
-  <a class="ea-link" href="https://github.com/Peng-EA/embodied-autonomy-stack/blob/main/docs/vision.md" target="_blank" rel="noreferrer">
+  <a class="ea-link" href="/vision" target="_blank" rel="noreferrer">
     <small>01 / Vision</small><span>为什么 LLM 不能做实时中心</span>
   </a>
-  <a class="ea-link" href="https://github.com/Peng-EA/embodied-autonomy-stack/blob/main/docs/interfaces.md" target="_blank" rel="noreferrer">
+  <a class="ea-link" href="/interfaces" target="_blank" rel="noreferrer">
     <small>02 / Interfaces</small><span>七个层间信号与契约原则</span>
   </a>
   <a class="ea-link" href="https://github.com/Peng-EA/embodied-autonomy-stack/tree/main/contracts" target="_blank" rel="noreferrer">
     <small>03 / Contracts</small><span>JSON Schema：机器可校验的定义</span>
   </a>
-  <a class="ea-link" href="https://github.com/Peng-EA/embodied-autonomy-stack/blob/main/docs/safety.md" target="_blank" rel="noreferrer">
+  <a class="ea-link" href="/safety" target="_blank" rel="noreferrer">
     <small>04 / Safety</small><span>情绪影响偏好，不影响安全</span>
   </a>
 </div>

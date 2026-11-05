@@ -348,12 +348,12 @@ const yOf = (i) => Y0 + i * (H + GAP)
   font-weight: 500;
 }
 .ea-t-body {
-  fill: #8b9aa6;
+  fill: #b3bec5;
   font-family: var(--ea-mono);
   font-size: 12.5px;
 }
 .ea-t-dim {
-  fill: #5c6b73;
+  fill: #8b98a4;
   font-family: var(--ea-mono);
   font-size: 12px;
 }

@@ -25,33 +25,34 @@ const GH = 'https://github.com/Peng-EA/embodied-autonomy-stack'
 
     <div class="ea-actions">
       <a class="ea-btn ea-btn--primary" :href="GH">
-        Read RFC on GitHub <span class="ea-arrow">→</span>
+        Read RFC on GitHub <span class="ea-arrow">↗</span>
       </a>
       <a class="ea-btn" :href="GH + '/discussions'">
         Discussions <span class="ea-arrow">↗</span>
       </a>
     </div>
 
+    <!-- 横向信息流：层（时间尺度）· 去掉了原来孤立的 LAYERS 4 单元格 -->
     <dl class="ea-spec">
-      <div>
-        <dt>Layers</dt>
-        <dd>4</dd>
-      </div>
       <div>
         <dt>L1 / L2</dt>
         <dd>10–100 ms</dd>
+        <span>稳态 · 反射</span>
       </div>
       <div>
         <dt>L3</dt>
         <dd>0.1–1 s</dd>
+        <span>情感 / 动机</span>
       </div>
       <div>
         <dt>L4</dt>
         <dd>1–10 s+</dd>
+        <span>规划协调</span>
       </div>
       <div>
         <dt>Baselines</dt>
-        <dd>B0·B0′·B1·B2</dd>
+        <dd>B0 · B0′ · B1 · B2</dd>
+        <span>四条对照基线</span>
       </div>
     </dl>
   </section>

@@ -28,13 +28,15 @@ pnpm docs:preview
 
 1. 仓库 Settings → Pages → Source 选 **GitHub Actions**（已通过 API 开好）。
 2. 推送 `main` 即触发 `.github/workflows/docs-site.yml`：装依赖 → 构建 → 发布。
-3. 站点地址：<https://peng-ea.github.io/embodied-autonomy-stack/>
+3. 自定义域名：<https://pjtbot.xyz/>（裸域 4 条 A 记录指向 GitHub Pages；NS 在阿里云 DNS）
 
 要点：
 
-- Project Pages 在 `/<repo>/` 子路径下，所以 CI 注入 `EA_BASE=/embodied-autonomy-stack/`；
-  本地开发不设这个变量，base 就是 `/`。
-- `cleanUrls` 必须保持 `false`：Pages 不做目录重写，`/architecture` 会 404。
+- 当前用自定义域名 `pjtbot.xyz`，base 是 `/`。若退回 `github.io/<repo>/`，
+  在 CI 里注入 `EA_BASE=/embodied-autonomy-stack/` 即可。
+- `cleanUrls` 开着（链接写 `/architecture`），但 Pages 不认 clean URL，
+  所以 `scripts/postbuild-pages.mjs` 会在构建后把 `architecture.html` 重排成
+  `architecture/index.html` —— Pages 认目录索引，两边就都对上了。
 - 换自定义域名时：仓库根放 `CNAME` 文件（内容为域名）+ DNS 加 CNAME 记录，
   然后可以把 `EA_BASE` 去掉、base 回到 `/`。
 
