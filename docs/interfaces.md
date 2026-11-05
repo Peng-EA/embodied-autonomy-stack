@@ -16,6 +16,31 @@
 | `reflex_override` | L2 → L4 | 中断 | <100 ms | "别规划了，要撞了" | [signals](../contracts/signals.schema.json) |
 | `outcome_event` | L2/感知 → L3/L1 | 事件 | 10–100 ms | 抓住 / 滑了 / 撞了 / 完成了 | [signals](../contracts/signals.schema.json) |
 
+## 信号流向
+
+```mermaid
+flowchart LR
+  L1["L1 稳态"]
+  L2["L2 反射"]
+  L3["L3 情感/动机"]
+  L4["L4 规划协调"]
+  LLM["LLM 外部服务"]
+
+  L1 -->|homeostatic_broadcast| L2
+  L1 -->|homeostatic_broadcast| L3
+  L1 -->|homeostatic_broadcast| L4
+  L3 -->|affect_vector 调制| L2
+  L3 -->|goal_candidate| L4
+  L4 -->|semantic_plan_request| LLM
+  LLM -->|semantic_plan_result| L4
+  L2 -->|reflex_override| L4
+  L2 -->|outcome_event| L1
+  L2 -->|outcome_event| L3
+```
+
+> 这张图是**语义源**：GitHub 直接渲染，站点用同一个 Mermaid 组件渲染。
+> 注意它只画 7 个信号的方向，不画时序——时序约束在下面的「逐信号要点」里。
+
 ## 契约原则
 
 | 原则 | 表述 | 违反的后果 |

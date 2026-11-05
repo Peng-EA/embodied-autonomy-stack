@@ -13,6 +13,8 @@
 | 确认情绪不会影响安全 | [safety.md](safety.md) |
 | 知道下一步做什么、怎么接活 | [roadmap.md](roadmap.md) |
 | 查 L1/L2/抢占/效价这些词 | [glossary.md](glossary.md) |
+| 看某个决策为什么这么定 | [adr/](adr/) |
+| 读长文观点（假说） | [blog/](blog/) |
 
 机器可校验的部分在别处：
 
@@ -45,5 +47,5 @@
 
 - [ ] `assets/architecture-realtime.png`：L1–L2 实时层拆分图（P1）
 - [ ] `assets/architecture-cognitive.png`：L3–L4 认知层拆分图（P1）
-- [ ] `adr/`：架构决策记录（P1，见 [roadmap.md](roadmap.md)）
+- [x] `adr/`：架构决策记录（0001 四层隐喻 / 0002 LLM 外部化 / 0003 基线定义）
 - [ ] `vision.md` 补"与现有工作的差异"一节，需引用具体文献

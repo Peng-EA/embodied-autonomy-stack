@@ -108,7 +108,17 @@ export default defineConfig({
       },
       {
         text: '推进',
-        items: [{ text: '路线图', link: '/roadmap' }],
+        items: [
+          { text: '路线图', link: '/roadmap' },
+          { text: '架构决策记录 (ADR)', link: `${GH}/tree/main/docs/adr` },
+        ],
+      },
+      {
+        text: '博客',
+        items: [
+          { text: '全部文章', link: '/blog/' },
+          { text: '为什么 LLM 不该做实时中心', link: '/blog/why-llm-should-not-be-the-real-time-center' },
+        ],
       },
     ],
     search: { provider: 'local' },

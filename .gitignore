@@ -28,8 +28,12 @@ site/evaluation.md
 site/safety.md
 site/roadmap.md
 site/glossary.md
+site/blog/
 site/public/assets/
 
 # 仿真：本地虚拟环境与运行日志
 sim/.venv/
 logs/
+
+# CI 校验脚本的依赖
+checks/node_modules/

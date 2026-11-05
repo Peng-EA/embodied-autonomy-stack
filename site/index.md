@@ -24,7 +24,7 @@ L1 说"我饿了" → L3 说"那我现在想去找吃的" → L4 说"路径这�
 
 <div class="ea-note">
   <strong>表中是预期方向，不是实测值。</strong>
-  本项目 v0.1 没有可运行代码，任何把预期写成实测的文档都算数据造假。
+  本项目 v0.1 只跑过单障碍物、10 秒、参数刚标定的仿真，任何把预期写成实测的文档都算数据造假。
   指标的分子、分母与通过线定义见
   <a href="/evaluation">docs/evaluation.md</a>。
 </div>
@@ -43,6 +43,9 @@ L1 说"我饿了" → L3 说"那我现在想去找吃的" → L4 说"路径这�
   </a>
   <a class="ea-link" href="/safety" target="_blank" rel="noreferrer">
     <small>04 / Safety</small><span>情绪影响偏好，不影响安全</span>
+  </a>
+  <a class="ea-link" href="/blog/why-llm-should-not-be-the-real-time-center">
+    <small>05 / Blog</small><span>为什么 LLM 不该做实时中心（假说）</span>
   </a>
 </div>
 
