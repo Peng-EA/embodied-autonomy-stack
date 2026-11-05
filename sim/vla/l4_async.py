@@ -161,7 +161,7 @@ class AsyncPlanner:
         t0 = time.perf_counter()
         try:
             r = requests.post(self.ep.generate_url, json=body,
-                              timeout=(0.1, self.timeout_ms / 1000.0))
+                              timeout=(0.5, self.timeout_ms / 1000.0))
             r.raise_for_status()
             data = r.json()
             res.raw = data.get("response", "")

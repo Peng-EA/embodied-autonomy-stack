@@ -21,6 +21,10 @@ ROBOT_HALF_DIAG = 0.12   # 用半个对边当"车体半径"，估算间隙用（
 
 
 class World:
+    # 类属性而不是实例属性：clone() 用 __new__ 复制物理状态、不跑 __init__，
+    # 写成实例属性会让反事实推演崩溃（实测：'World' object has no attribute 'geom_groups'）
+    geom_groups: np.ndarray | None = None
+
     def __init__(self, scene: Path | None = None):
         # 用 Python 读文件再交给 MuJoCo：Windows 下 xml_path 走 C 层 fopen，
         # 遇到非 ASCII 路径（本仓库在中文目录里）会打不开。
@@ -30,7 +34,6 @@ class World:
         self.robot = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "robot")
         self.robot_geom = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_geom")
         self.floor_geom = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
-        self.geom_groups: np.ndarray | None = None   # None=全部；子类可收紧
         self.reset()
 
     # ------------------------------------------------------------ 基础

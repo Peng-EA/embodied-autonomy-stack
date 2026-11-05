@@ -56,7 +56,7 @@ class OllamaActBackend(VLABackend):
             body["options"]["num_gpu"] = self.ep.num_gpu
         try:
             r = requests.post(self.ep.generate_url, json=body,
-                              timeout=(0.05, self.ep.timeout_ms / 1000.0))
+                              timeout=(0.25, self.ep.timeout_ms / 1000.0))
             r.raise_for_status()
             data = r.json()
         except requests.exceptions.Timeout as e:
