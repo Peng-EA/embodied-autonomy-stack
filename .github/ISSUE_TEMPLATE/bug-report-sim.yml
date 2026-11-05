@@ -1,0 +1,79 @@
+name: 仿真 Bug / Sim bug
+description: sim/ 里的闭环出问题了（崩溃、行为不对、日志异常），附复现命令与日志片段
+title: "[sim] "
+labels: ["sim"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### 提交前先确认
+
+        - 你已经跑过 `sim/.venv/Scripts/python -m sim.main --no-render`（关掉面板，先排除渲染问题）
+        - 日志在 `logs/<日期>-<基线>-stage1-self-needs.jsonl`
+        - 一个 issue 只报一个问题
+
+  - type: input
+    id: command
+    attributes:
+      label: 复现命令
+      description: 完整命令（含 --baseline / --duration / --seed / --clearance-mode）
+      placeholder: sim/.venv/Scripts/python -m sim.main --baseline b1 --duration 10 --seed 7
+    validations:
+      required: true
+
+  - type: dropdown
+    id: baseline
+    attributes:
+      label: 基线
+      options:
+        - b1 (完整)
+        - b2 (无 L1 抢占)
+        - b0p (无情绪调制)
+        - b0 (全经 LLM)
+        - 未指定
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望发生什么
+      placeholder: 例：撞墙前应触发 reflex_override，并在 7 秒左右到桩
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际发生什么
+      description: 行为描述 + 关键数字（最终电量 / 否决次数 / 是否降级）
+      placeholder: 例：全程无 override，机器人在 y=-0.18 卡死，最终电量 18%
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: 日志片段
+      description: 前 20 行 + 末尾 10 行（或压缩后附链接）。**不要贴整份日志。**
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: 环境
+      description: 操作系统 / Python / mujoco 版本 / 是否用 sim/.venv
+      placeholder: Windows 11 · Python 3.12.14 · mujoco 3.17.0 · sim/.venv
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 自查
+      options:
+        - label: 已用 --no-render 复现过（排除了面板渲染问题）
+        - label: 已确认不是文档过期导致的误解（docs/ 与 sim/README.md 对得上）
+        - label: 日志里的数字与我描述的一致
