@@ -68,7 +68,9 @@ def _baseline_meta(baseline: str) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="EA Stack · 阶段 1 最小闭环")
-    ap.add_argument("--baseline", default="b1", choices=["b0", "b0p", "b1", "b2"])
+    ap.add_argument("--baseline", default="full",
+                    choices=["full", "b0", "b0p", "b1", "b2"],
+                    help="full=本系统全开；b0/b0p/b1/b2=四条消融基线")
     ap.add_argument("--duration", type=float, default=C.DURATION_S)
     ap.add_argument("--llm-disconnect", type=float, default=None,
                     help="在第 N 秒切断 LLM（检验降级路径）")
@@ -78,6 +80,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--trace", action="store_true", help="每 0.25s 打一行状态（调试用）")
     ap.add_argument("--clearance-mode", choices=["raycast", "analytic"], default=None,
                     help="感知方式；analytic 只用于对照（验证换成真实几何后行为是否变化）")
+    ap.add_argument("--print-config", action="store_true",
+                    help="打印由 evals/baselines/*.yaml 推导出的开关后退出（核对用）")
     ap.add_argument("--no-counterfactual", action="store_true",
                     help="关掉反事实推演（快，但没有真实抢占正确率）")
     args = ap.parse_args(argv)
@@ -89,6 +93,11 @@ def main(argv: list[str] | None = None) -> int:
     cfg = C.RunConfig(baseline=args.baseline, duration_s=args.duration,
                       llm_disconnect_at=args.llm_disconnect, seed=args.seed,
                       log_dir=args.log_dir, render=not args.no_render).apply_baseline()
+
+    if args.print_config:
+        import json as _json
+        print(_json.dumps(cfg.summary(), ensure_ascii=False, indent=2))
+        return 0
 
     t0 = time.perf_counter()
     meta = {
@@ -103,7 +112,8 @@ def main(argv: list[str] | None = None) -> int:
         "clearance_mode": C.CLEARANCE_MODE,
         "counterfactual": not args.no_counterfactual,
         "affect_modulating": cfg.affect_modulating,
-        **_baseline_meta(cfg.baseline),
+        "baseline_file": cfg.baseline_file,
+        "baseline_sha256": cfg.baseline_sha256,
     }
     log = EventLog(REPO / cfg.log_dir, meta)
     # 日志时间戳必须是**仿真时间**：仿真跑得比现实快（10s 仿真 ≈ 0.3s 真实），

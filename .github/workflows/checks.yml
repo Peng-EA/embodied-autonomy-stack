@@ -1,0 +1,59 @@
+name: checks
+
+# 三类检查：文档结构 / 契约与模板 / 仿真能起来
+# 与 docs-site.yml 分开：这里只验证，不部署。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    name: docs structure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 链接 / 表格 / 排版
+        run: node scripts/check-docs.mjs
+
+  contracts:
+    name: contracts & templates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 安装校验依赖
+        working-directory: checks
+        run: npm install --no-audit --no-fund
+      - name: Schema / 样例 / 基线 yaml / Issue 模板
+        working-directory: checks
+        run: node validate-contracts.mjs
+
+  sim:
+    name: sim smoke（6 秒闭环）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: 安装依赖
+        run: python -m pip install --upgrade pip && python -m pip install -r sim/requirements.txt
+      - name: 跑 6 秒闭环（无面板）
+        run: python -m sim.main --baseline full --duration 6 --no-render
+      - name: 日志必须可解析
+        run: |
+          ls -1 logs/*.jsonl
+          grep -q '"event": "summary"' logs/*.jsonl
+          grep -q '"event": "reflex_override"' logs/*.jsonl || echo "本次没有触发反射（合法，只做提示）"

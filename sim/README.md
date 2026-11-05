@@ -20,7 +20,8 @@ python -m venv sim/.venv
 sim/.venv/Scripts/python -m pip install -r sim/requirements.txt   # Windows
 # Linux/macOS: sim/.venv/bin/python -m pip install -r sim/requirements.txt
 
-sim/.venv/Scripts/python -m sim.main                      # 默认 B1，10 秒
+sim/.venv/Scripts/python -m sim.main                      # 默认 full（全开），10 秒
+sim/.venv/Scripts/python -m sim.main --print-config        # 看基线 yaml 推导出的开关
 sim/.venv/Scripts/python -m sim.main --trace              # 每 0.25s 打一行状态
 sim/.venv/Scripts/python -m sim.main --llm-disconnect 3   # 3 秒切断 LLM，看降级
 sim/.venv/Scripts/python -m sim.main --baseline b2        # 关掉 L1 抢占（对照）
@@ -41,7 +42,22 @@ sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈�
 | `counterfactual.py` | 反事实推演：判断一次否决"该不该抢" |
 | `calibrate.py` | 阈值标定：`CLEARANCE_WARN` × 来速 的碰撞矩阵 |
 | `contracts.py` | 与 `contracts/*.schema.json` 对应的数据结构 + JSONL 日志 |
-| `dashboard.py` | 终端面板（UTF-8 用框线，GBK 自动退成 `+-|`） |
+| `dashboard.py` | 终端面板（UTF-8 用框线，GBK 自动退成 ASCII 边框） |
+
+## 基线：full 是主张，四条 yaml 是消融
+
+`sim` 的开关**从 `evals/baselines/*.yaml` 读**（`sim/baseline.py`），代码里不再另抄一份。
+四条 yaml 基线都是"关掉某机制"的消融版本；本系统自己的配置是不带 yaml 的 `full`：
+
+| 配置 | 关掉什么 | 10 秒实测 |
+|---|---|---|
+| `full` | 什么都不关 | 30.5%，到桩充电，抢占正确率 1/1 |
+| B1 | 情绪调制 | 30.8%（几乎无差别 → 情绪在当前场景没有证据） |
+| B2 | L1 抢占 | 17.6%，晚约 2 秒到桩 |
+| B0′ | L1/L3（脚本航点） | 30.0%，不充电（不读电量，已知局限） |
+| B0 | L1/L2/L3 | 30.0%，不充电（无需求来源） |
+
+> 早期版本把 B1 当全开，导致标着 B1 的数字其实是 `full`；已在 `docs/adr/0003` 记录并纠正。
 
 ## 三个已经做过实测的问题
 
@@ -99,9 +115,9 @@ sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈�
 
 | 检查 | 结果 |
 |---|---|
-| 闭环跑通 | `充电完成=是`，B1 最终电量 ≈30.5% |
+| 闭环跑通 | `充电完成=是`，`full` 最终电量 ≈30.5% |
 | 抢占链可审计 | `preempt` 事件带 `preempted_by=L2.reflex_override` |
-| 基线差异 | B1 ≈30.5% vs B2 ≈17.6%（无抢占 → 晚约 2 秒到桩） |
+| 基线差异 | `full` ≈30.5% vs B2 ≈17.6%（无抢占 → 晚约 2 秒到桩） |
 | 断线降级 | `--llm-disconnect` → `降级=YES`，仍能到桩 |
 | 抢占正确率 | 反事实 1/1，误抢 0 |
 | 阈值有据 | 0.20 m 为 0 碰撞边界（见 calibration.md） |

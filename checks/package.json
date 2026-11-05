@@ -1,0 +1,14 @@
+{
+  "name": "ea-checks",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "EA Stack 的契约与模板校验（CI 里独立安装，不影响站点依赖）",
+  "scripts": {
+    "validate": "node validate-contracts.mjs"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "js-yaml": "^4.1.0"
+  }
+}

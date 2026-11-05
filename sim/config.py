@@ -85,32 +85,47 @@ WALL_HALF_T = 0.06
 class RunConfig:
     """一次实验的开关（对应 evals/baselines/*.yaml 的可关机制）。"""
 
-    baseline: str = "b1"          # b0 | b0p | b1 | b2
+    baseline: str = "full"        # full（本系统）| b0 | b0p | b1 | b2（消融/对照）
     duration_s: float = DURATION_S
     llm_disconnect_at: float | None = None   # 秒；模拟 LLM 断线
     seed: int = 7
     log_dir: str = "logs"
     render: bool = True
-    # 由 baseline 推导的开关
+    # 由 evals/baselines/*.yaml 推导的开关（见 sim/baseline.py，不在代码里再抄一遍）
     preemption_enabled: bool = True
     affect_modulating: bool = True
+    need_generation: bool = True
     layers_enabled: dict = field(default_factory=lambda: {
         "l1": True, "l2": True, "l3": True, "l4": True,
     })
+    baseline_file: str = ""
+    baseline_sha256: str = ""
 
     def apply_baseline(self) -> "RunConfig":
-        b = self.baseline.lower()
-        if b == "b1":
-            pass
-        elif b == "b2":
-            self.preemption_enabled = False     # 有需求、不抢占
-        elif b == "b0p":
-            self.affect_modulating = False      # 行为树式：按脚本走
-        elif b == "b0":
-            # 所有决策都经 LLM：关掉 L1/L2/L3 的自主性
-            self.layers_enabled = {"l1": False, "l2": False, "l3": False, "l4": True}
-            self.preemption_enabled = False
-            self.affect_modulating = False
-        else:
-            raise SystemExit(f"未知基线: {self.baseline}")
+        """从 yaml 读开关。yaml 是唯一事实源——改 yaml 立即生效，改代码不生效。
+
+        注意：四条 yaml 基线（B0/B0p/B1/B2）都是**消融**，比如 B1 是"关掉情绪调制"。
+        本系统自己的配置是 `full`（全开），它没有 yaml，定义在 baseline.derive() 里。
+        早期版本把 B1 当全开，导致"B1"这个标签下的数字其实是 full——已纠正。
+        """
+        from . import baseline as baseline_mod     # 延迟导入：避免 config↔baseline 循环
+
+        sw = baseline_mod.derive(self.baseline)
+        self.preemption_enabled = sw["preemption_enabled"]
+        self.affect_modulating = sw["affect_modulating"]
+        self.need_generation = sw["need_generation"]
+        self.layers_enabled = dict(sw["layers_enabled"])
+        self.baseline_file = sw["baseline_file"]
+        self.baseline_sha256 = sw["baseline_sha256"]
         return self
+
+    def summary(self) -> dict:
+        return {
+            "baseline": self.baseline,
+            "baseline_file": self.baseline_file,
+            "baseline_sha256": self.baseline_sha256[:16] + "…",
+            "layers_enabled": self.layers_enabled,
+            "preemption_enabled": self.preemption_enabled,
+            "affect_modulating": self.affect_modulating,
+            "need_generation": self.need_generation,
+        }

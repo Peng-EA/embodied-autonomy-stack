@@ -61,6 +61,9 @@ class AffectMotivation:
         if charging and self.active_goal == "hold_charge":
             return
 
+        if not self.cfg.need_generation:      # 由 evals/baselines/*.yaml 决定
+            return
+
         if t - self._last_goal_t < C.GOAL_MIN_INTERVAL:
             return
 
