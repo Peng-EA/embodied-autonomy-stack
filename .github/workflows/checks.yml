@@ -77,5 +77,5 @@ jobs:
           python -c "import json;d=json.load(open('/tmp/vla.json'));ks=('M1_stale_adoption','M2_l2_closed_loop','M3_cross_layer','M4_preempt_residual','M5_transport','M6_physics');miss=[k for k in ks if k not in d];assert not miss,('缺指标',miss);assert d['M5_transport']['n']>0,'L4 一次请求都没发生';assert d['M2_l2_closed_loop']['chunks']>0,'L2 没产出动作块';print('M1',d['M1_stale_adoption'],'n_l4',d['M5_transport']['n'],'chunks',d['M2_l2_closed_loop']['chunks'])"
       - name: 假服务的故障必须被记到（超时或拒连，二者都算"端点坏了"）
         run: |
-          python -m sim.test_vla_l4 --provider fake --fake-mode timeout --l4-timeout-ms 100 \n            --scene stage1 --duration 8 --fast --no-render --report /tmp/vla_to.json
+          python -m sim.test_vla_l4 --provider fake --fake-mode timeout --l4-timeout-ms 100 --l4-period 0.5 --scene stage1 --duration 6 --no-render --report /tmp/vla_to.json
           python -c "import json;d=json.load(open('/tmp/vla_to.json'));m=d['M5_transport'];print('timeouts',m['timeouts'],'conn',m['connection_errors'],'n',m['n']);assert m['timeouts']+m['connection_errors']>0,'假服务要么 hang 要么拒连，客户端必须至少记到一种'"
