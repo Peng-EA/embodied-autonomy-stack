@@ -1,0 +1,35 @@
+# 基线 B0p：Behavior tree baseline
+# 状态：草案（未跑通，数值为预期方向，不是实测）
+
+id: B0p
+name: Behavior tree baseline
+description: 传统行为树，不依赖 LLM，可断线运行（工业界现状对照）
+
+layers:
+  l1_homeostasis: disabled
+  l2_reflex: enabled
+  l3_affect: disabled
+  l4_planning: behavior_tree
+  perception: enabled
+
+preemption:
+  enabled: false
+
+need_generation:
+  enabled: false
+
+llm:
+  required: false
+
+metrics:
+  - llm_disconnect_survival
+  - need_driven_behavior_ratio
+  - affect_modulation_significance
+  - anomaly_recovery_rate
+  - preemption_precision
+  - development_curve
+
+expectations:
+  llm_disconnect_survival: high
+  need_driven_behavior_ratio: low
+  anomaly_recovery_rate: medium

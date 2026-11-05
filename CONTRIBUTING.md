@@ -1,33 +1,70 @@
 # 参与指南
 
-流程：**先 Issue/RFC → 再 PR → 附复现日志。**
+本项目当前处于 **v0.1 设计草案**：没有可运行代码，讨论的是架构契约。所以这里的"贡献"主要指**可被检验的设计**，而不是代码量。
 
-1. 开 Issue 讨论架构分歧，越具体越好。
-2. 认领 `good-first-architecture` 标签任务。
-3. 提交 `docs/` 下的设计草案或复现日志。
-4. 有真机/仿真平台，开 Discussion 登记。
+## 流程：先 Issue → 再 PR → 附证据
 
-## 提交设计草案
+| 步骤 | 做什么 | 去哪 |
+|---|---|---|
+| 1 | 提架构分歧或新提案 | [架构 RFC 模板](.github/ISSUE_TEMPLATE/architecture-rfc.yml) |
+| 2 | 得到方向性认可后再动笔 | PR（见下方检查项） |
+| 3 | 附上证据 | 复现日志 / schema 校验结果 / 引用 |
 
-- 放在 `docs/` 下，文件名说明主题（如 `docs/architecture-l3.md`）。
-- 明确写出：改哪一层、改什么契约、对哪条核心主张有影响。
-- 如果与现有文档冲突，先开 Issue 说明理由，不要直接改对方的内容。
+**不要跳过第 1 步直接开 PR 改契约。** 契约类改动需要先讨论，因为下游实现会依赖它。
 
-## 提交复现日志
+## 什么算好贡献
 
-- 按 `docs/evaluation.md` 的基线表记录，标明所用基线（B0/B0′/B1/B2）。
-- 附上运行环境、任务集、原始日志（可脱敏）。
-- 结论允许是"没复现出来"——负结果同样有价值。
+- **指出架构漏洞**：能说明"在什么场景下哪一层会失效"，比"我觉得应该加个模块"有用得多。
+- **可证伪的预测**：任何主张都请回答"如果我是对的，什么实验会显示差异"。
+- **补文档与图**：把口头争论过的结论落成文字，本身就是在防止重复争论。
+- **负结果**：复现不出来、实验推翻我们的假设——这类结论同样欢迎，请不要因为"没成功"就不提。
 
-## Issue 标签
+## PR 检查项
+
+提交前请对照 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)：
+
+1. 是否附了复现日志或校验证据
+2. 是否改动了 `contracts/`（改动需先有 ADR）
+3. 是否同步更新了受影响的 `docs/`
+4. 是否动到了安全相关内容（见 [SECURITY.md](SECURITY.md)）
+
+## 文档结构
+
+```text
+README.md            门面：一段摘要 + 目录入口，不放大段正文
+docs/                正文：为什么、架构、契约、评价、安全、路线图、术语
+contracts/           层间信号的 JSON Schema（机器可校验的定义）
+evals/               基线与指标配置、复现日志格式
+.github/             Issue / PR 模板
+```
+
+写文档时的约定：
+
+- 一份文档只负责一件事，别把路线图塞进架构文档。
+- 文档开头标明状态：`定稿` / `草案` / `占位`。
+- 数字（阈值、时间窗、采样率）没有实测依据就写 `TBD` 并说明谁来定，**不要编**。
+
+## 提交信息
+
+```text
+<type>: <一句话>
+
+docs:     文档
+contracts: schema / 样例
+evals:     基线 / 指标 / 日志格式
+governance:模板、流程、许可
+```
+
+例：`contracts: add affect_vector schema draft`
+
+## 标签
 
 `architecture` `interoception` `affect` `motivation` `execution-monitor`
 `outcome-detection` `interface-contract` `llm-boundary` `real-time` `safety`
 `sim` `good-first-architecture`
 
-## 欢迎的贡献方式
+新手可以从 `good-first-architecture` 开始（通常是补一段文档或画一张图）。
 
-- 指出架构漏洞（欢迎用实验推翻我们的假设）
-- 补文档、画图、翻译
-- 实现仿真最小闭环
-- 真机/仿真平台适配
+## 许可
+
+提交即表示同意以 [Apache-2.0](LICENSE) 授权你的贡献。没有 CLA，也不需要签任何东西。

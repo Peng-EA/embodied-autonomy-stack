@@ -1,0 +1,9 @@
+{
+  "signal": "homeostatic_broadcast",
+  "source": "L1",
+  "severity": 0.82,
+  "cause": "battery_low",
+  "temperature_c": 41.5,
+  "preemptible": true,
+  "timestamp_ms": 1762334400000
+}

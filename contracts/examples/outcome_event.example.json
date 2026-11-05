@@ -1,0 +1,12 @@
+{
+  "signal": "outcome_event",
+  "from": "L2",
+  "to": [
+    "L1",
+    "L3"
+  ],
+  "event_type": "slip",
+  "task_id": "task_123",
+  "detail": "gripper slip detected, force dropped to 12% of target",
+  "timestamp_ms": 1762334460789
+}

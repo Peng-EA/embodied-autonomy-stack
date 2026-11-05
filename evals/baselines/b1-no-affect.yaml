@@ -1,0 +1,35 @@
+# 基线 B1：No affect modulation
+# 状态：草案（未跑通，数值为预期方向，不是实测）
+
+id: B1
+name: No affect modulation
+description: L1/L2/L4 保留，L3 情绪向量不调制 L2 参数（检验情绪调制是否必要）
+
+layers:
+  l1_homeostasis: enabled
+  l2_reflex: enabled
+  l3_affect: enabled_but_not_modulating
+  l4_planning: enabled
+  perception: enabled
+
+preemption:
+  enabled: true
+
+need_generation:
+  enabled: true
+
+llm:
+  required: true
+
+metrics:
+  - llm_disconnect_survival
+  - need_driven_behavior_ratio
+  - affect_modulation_significance
+  - anomaly_recovery_rate
+  - preemption_precision
+  - development_curve
+
+expectations:
+  affect_modulation_significance: not_significant
+  need_driven_behavior_ratio: high
+  preemption_precision: high

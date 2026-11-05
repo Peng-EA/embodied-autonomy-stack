@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Peng-EA/embodied-autonomy-stack/contracts/signals.schema.json",
+  "title": "Layer Signal Envelope",
+  "description": "层间信号联合类型（不含 affect_vector / homeostatic_broadcast，它们各自独立成文件）。状态：v0.1-draft。",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/goal_candidate"
+    },
+    {
+      "$ref": "#/$defs/semantic_plan_request"
+    },
+    {
+      "$ref": "#/$defs/semantic_plan_result"
+    },
+    {
+      "$ref": "#/$defs/reflex_override"
+    },
+    {
+      "$ref": "#/$defs/outcome_event"
+    }
+  ],
+  "$defs": {
+    "goal_candidate": {
+      "type": "object",
+      "required": [
+        "signal",
+        "from",
+        "candidates",
+        "timestamp_ms"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "signal": {
+          "const": "goal_candidate"
+        },
+        "from": {
+          "const": "L3"
+        },
+        "timestamp_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "candidates": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "goal",
+              "priority",
+              "source_need"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "goal": {
+                "type": "string",
+                "minLength": 1
+              },
+              "priority": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "source_need": {
+                "type": "string",
+                "minLength": 1,
+                "description": "必填：由哪条需求驱动。缺它就算不出需求驱动行为占比"
+              }
+            }
+          }
+        }
+      }
+    },
+    "semantic_plan_request": {
+      "type": "object",
+      "required": [
+        "signal",
+        "from",
+        "request_id",
+        "goal",
+        "timestamp_ms"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "signal": {
+          "const": "semantic_plan_request"
+        },
+        "from": {
+          "const": "L4"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "用于超时与取消；重试必须换新 id"
+        },
+        "goal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "context": {
+          "type": "object",
+          "description": "结构化上下文，内容由实现定义"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "超时值 TBD"
+        },
+        "timestamp_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "semantic_plan_result": {
+      "type": "object",
+      "required": [
+        "signal",
+        "from",
+        "request_id",
+        "plan",
+        "timestamp_ms"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "signal": {
+          "const": "semantic_plan_result"
+        },
+        "from": {
+          "const": "LLM"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plan": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 0
+        },
+        "degraded": {
+          "type": "boolean",
+          "description": "true = 本地降级策略产出，非 LLM 结果"
+        },
+        "timestamp_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "reflex_override": {
+      "type": "object",
+      "required": [
+        "signal",
+        "from",
+        "reason",
+        "interrupted_task",
+        "timestamp_ms"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "signal": {
+          "const": "reflex_override"
+        },
+        "from": {
+          "const": "L2"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "collision_imminent",
+            "force_limit",
+            "human_in_safety_zone",
+            "balance_loss"
+          ]
+        },
+        "interrupted_task": {
+          "type": "string",
+          "minLength": 1
+        },
+        "safety_margin": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "触发时距离阈值的余量；定义 TBD"
+        },
+        "timestamp_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "outcome_event": {
+      "type": "object",
+      "required": [
+        "signal",
+        "from",
+        "to",
+        "event_type",
+        "timestamp_ms"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "signal": {
+          "const": "outcome_event"
+        },
+        "from": {
+          "type": "string",
+          "enum": [
+            "L2",
+            "perception"
+          ]
+        },
+        "to": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": [
+              "L1",
+              "L3"
+            ]
+          }
+        },
+        "event_type": {
+          "type": "string",
+          "enum": [
+            "grasp",
+            "slip",
+            "collision",
+            "completion",
+            "failure"
+          ]
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "timestamp_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

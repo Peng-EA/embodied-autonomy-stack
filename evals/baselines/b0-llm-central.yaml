@@ -1,0 +1,35 @@
+# 基线 B0：LLM centralized control
+# 状态：草案（未跑通，数值为预期方向，不是实测）
+
+id: B0
+name: LLM centralized control
+description: 所有行为决策都经 LLM；无分层实时控制，断线即停
+
+layers:
+  l1_homeostasis: disabled
+  l2_reflex: disabled
+  l3_affect: disabled
+  l4_planning: enabled
+  perception: enabled
+
+preemption:
+  enabled: false
+
+need_generation:
+  enabled: false
+
+llm:
+  required: true
+
+metrics:
+  - llm_disconnect_survival
+  - need_driven_behavior_ratio
+  - affect_modulation_significance
+  - anomaly_recovery_rate
+  - preemption_precision
+  - development_curve
+
+expectations:
+  llm_disconnect_survival: low
+  need_driven_behavior_ratio: low
+  anomaly_recovery_rate: low

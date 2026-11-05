@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Peng-EA/embodied-autonomy-stack/contracts/affect_vector.schema.json",
+  "title": "AffectVector",
+  "description": "L3 输出的连续情绪状态向量。只能用于调制参数，禁止进入安全判定（见 docs/safety.md）。状态：v0.1-draft。",
+  "type": "object",
+  "required": [
+    "valence",
+    "arousal",
+    "dominance",
+    "timestamp_ms"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "valence": {
+      "type": "number",
+      "minimum": -1,
+      "maximum": 1,
+      "description": "效价：负=不适，正=愉悦"
+    },
+    "arousal": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "唤醒：静息 → 高度激活"
+    },
+    "dominance": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "支配感：失控 → 完全掌控"
+    },
+    "curiosity": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "探索驱动强度"
+    },
+    "fear": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "回避驱动强度；仅调制参数，不改变安全阈值"
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "UTC 毫秒时间戳"
+    }
+  }
+}

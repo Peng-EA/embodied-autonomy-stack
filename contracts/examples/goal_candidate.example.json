@@ -1,0 +1,17 @@
+{
+  "signal": "goal_candidate",
+  "from": "L3",
+  "timestamp_ms": 1762334400100,
+  "candidates": [
+    {
+      "goal": "seek_charger",
+      "priority": 0.91,
+      "source_need": "battery_low"
+    },
+    {
+      "goal": "finish_current_pick",
+      "priority": 0.44,
+      "source_need": "task_stall"
+    }
+  ]
+}

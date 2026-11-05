@@ -1,0 +1,29 @@
+%% Embodied Autonomy Stack · 四层长图（本 PNG 的源图，改动请同步 PNG）
+%% 渲染：mermaid-cli -i architecture-long.mmd -o architecture-long.png -w 1800 -b white
+flowchart TB
+    subgraph L4 [L4 · 规划协调层（异步，1–10 s+）]
+        PC[Planning Coordinator<br/>目标排序 / 任务分解协调]
+    end
+    subgraph EXT [外部服务]
+        LLM[LLM Semantic Service<br/>语义规划 / 对话<br/>异步、可插拔、可断线]
+    end
+    subgraph L3 [L3 · 情感/动机层（0.1–1 s）]
+        AF[Affect / Motivation<br/>效价/唤醒/支配 + 目标候选]
+    end
+    subgraph L2 [L2 · 反射层（10–100 ms）]
+        RF[Reflex Control<br/>避障/平衡/力控/接触修正<br/>硬否决权]
+    end
+    subgraph L1 [L1 · 内感受/稳态层（10–100 ms）]
+        HO[Homeostasis<br/>设定点 / 偏离检测 / 全局广播]
+    end
+
+    HO -->|"homeostatic_broadcast（可抢占全局）"| AF
+    HO -->|"homeostatic_broadcast（可抢占全局）"| RF
+    HO -->|"homeostatic_broadcast（可抢占全局）"| PC
+    AF -->|"affect_vector（调制参数）"| RF
+    AF -->|"goal_candidate"| PC
+    PC -->|"semantic_plan_request"| LLM
+    LLM -->|"semantic_plan_result"| PC
+    RF -->|"reflex_override（硬中断）"| PC
+    RF -->|"outcome_event"| AF
+    RF -->|"outcome_event"| HO

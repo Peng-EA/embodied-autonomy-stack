@@ -1,0 +1,73 @@
+name: 架构 RFC / Architecture RFC
+description: 提出架构层面的主张、冲突或改动（不是 bug，不是功能请求）
+title: "[RFC] "
+labels: ["architecture", "rfc"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### 开 RFC 之前
+
+        - 一个 RFC 只解决**一个**问题。
+        - "可证伪预测"是必填项。没有它，这个提案基本没法被评估。
+        - 涉及 `contracts/` 的改动，请先在这里达成方向共识，再开 PR。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题陈述
+      description: 现在的架构在什么具体场景下失效？请给场景，不要只说"不够好"。
+      placeholder: 例：L1 电量低于阈值时，L4 仍在执行长任务，因为契约里没有定义抢占点。
+    validations:
+      required: true
+
+  - type: textarea
+    id: conflict
+    attributes:
+      label: 与现有设计的冲突点
+      description: 涉及哪一层 / 哪条核心主张 / 哪份文档（docs/architecture.md、docs/interfaces.md、evals/）。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+      description: 具体到可执行：改哪个信号、改哪个字段、加哪条约束。
+    validations:
+      required: true
+
+  - type: textarea
+    id: falsifiable
+    attributes:
+      label: 可证伪预测
+      description: 如果方案成立，用什么实验、在哪个基线上、看到什么指标差异？请写具体指标与预期方向。
+      placeholder: 例：在 B1 基线上注入 20 次电量骤降，抢占正确率应从 0 提升到 >0.8。
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 备选方案与不采纳的代价
+      description: 你考虑过但否掉的做法，以及维持现状会付出什么。
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: 影响面
+      options:
+        - label: 影响层间信号契约（contracts/）
+        - label: 影响基线或评价指标（evals/）
+        - label: 需要新增 ADR
+        - label: 涉及物理安全（见 SECURITY.md）
+
+  - type: input
+    id: docs
+    attributes:
+      label: 相关文档
+      placeholder: docs/architecture.md, docs/interfaces.md
+    validations:
+      required: false

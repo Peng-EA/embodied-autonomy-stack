@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Peng-EA/embodied-autonomy-stack/contracts/homeostatic.schema.json",
+  "title": "HomeostaticBroadcast",
+  "description": "L1 全局广播：稳态偏离。接收方必须在下一个 tick 前检查，不允许排队。状态：v0.1-draft。",
+  "type": "object",
+  "required": [
+    "signal",
+    "source",
+    "severity",
+    "cause",
+    "timestamp_ms"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "signal": {
+      "const": "homeostatic_broadcast"
+    },
+    "source": {
+      "const": "L1"
+    },
+    "severity": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "偏离程度归一化值；曲线形状 TBD"
+    },
+    "cause": {
+      "type": "string",
+      "enum": [
+        "battery_low",
+        "thermal_high",
+        "joint_stress",
+        "task_stall",
+        "overload"
+      ],
+      "description": "需求来源；枚举可扩展（加值 = minor）"
+    },
+    "preemptible": {
+      "const": true,
+      "description": "L1 广播本身即最高优先级，此项恒为 true；保留字段是为了让信封结构统一"
+    },
+    "temperature_c": {
+      "type": "number",
+      "description": "示例性附加字段：实现可登记扩展字段，但须在本文件声明"
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

@@ -1,0 +1,35 @@
+# 基线 B2：Need generation without L1 preemption
+# 状态：草案（未跑通，数值为预期方向，不是实测）
+
+id: B2
+name: Need generation without L1 preemption
+description: L1 仍生成需求信号但不抢占（检验抢占机制是否必要）
+
+layers:
+  l1_homeostasis: enabled_not_preempting
+  l2_reflex: enabled
+  l3_affect: enabled
+  l4_planning: enabled
+  perception: enabled
+
+preemption:
+  enabled: false
+
+need_generation:
+  enabled: true
+
+llm:
+  required: true
+
+metrics:
+  - llm_disconnect_survival
+  - need_driven_behavior_ratio
+  - affect_modulation_significance
+  - anomaly_recovery_rate
+  - preemption_precision
+  - development_curve
+
+expectations:
+  preemption_precision: not_applicable
+  need_driven_behavior_ratio: high
+  anomaly_recovery_rate: medium
