@@ -4,22 +4,28 @@ const GH = 'https://github.com/Peng-EA/embodied-autonomy-stack'
 const DESC =
   '给 LLM 划边界，给具身智能补上稳态、反射、情感调制、需求生成与执行修正。v0.1 设计草案。'
 
+// 部署在 GitHub Pages 的 Project Pages 子路径下：/embodied-autonomy-stack/
+// 本地开发保持 '/'，CI 通过 EA_BASE 注入（见 .github/workflows/docs-site.yml）
+const BASE = process.env.EA_BASE || '/'
+
 // 说明：站点目前只有首页。arch/contracts/evals 等站内页面在第二步接入（由 docs/ 自动同步生成），
 // 在那之前导航指向 GitHub 原文，避免出现 404。
 export default defineConfig({
   lang: 'zh-CN',
+  base: BASE,
   title: 'Embodied Autonomy Stack',
   titleTemplate: ':title · EA Stack',
   description: DESC,
   appearance: 'dark',
-  cleanUrls: true,
+  // GitHub Pages 不做目录重写，cleanUrls 会让 /architecture 变成 404，故保持 false
+  cleanUrls: false,
   lastUpdated: false,
   // site/README.md 是仓库内的开发说明，不发布成页面
   srcExclude: ['README.md'],
   head: [
     ['meta', { name: 'theme-color', content: '#080B0C' }],
     ['meta', { name: 'color-scheme', content: 'dark light' }],
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: `${BASE}favicon.svg` }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:title', content: 'Embodied Autonomy Stack' }],
     ['meta', { property: 'og:description', content: DESC }],
@@ -86,5 +92,4 @@ export default defineConfig({
       linkText: 'return home',
     },
   },
-  sitemap: { hostname: 'https://ea-stack.vercel.app' },
 })

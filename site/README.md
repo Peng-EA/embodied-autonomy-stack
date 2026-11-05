@@ -22,13 +22,21 @@ pnpm docs:build      # 产物在 site/.vitepress/dist
 pnpm docs:preview
 ```
 
-## 部署（Vercel）
+## 部署（GitHub Pages + Actions）
 
-1. Vercel → New Project → 导入 `Peng-EA/embodied-autonomy-stack`。
-2. **Root Directory 选 `site`**（其余由 `site/vercel.json` 接管）。
-3. Framework Preset: VitePress；Build: `pnpm run docs:build`；Output: `.vitepress/dist`。
-4. 绑定域名：Project → Settings → Domains → 添加你的域，按提示加 CNAME。
-5. 绑定后把 `site/.vitepress/config.mts` 里的 `sitemap.hostname` 改成真实域名。
+**不需要任何第三方平台账号。** 只用本仓库的 Actions 权限：
+
+1. 仓库 Settings → Pages → Source 选 **GitHub Actions**（已通过 API 开好）。
+2. 推送 `main` 即触发 `.github/workflows/docs-site.yml`：装依赖 → 构建 → 发布。
+3. 站点地址：<https://peng-ea.github.io/embodied-autonomy-stack/>
+
+要点：
+
+- Project Pages 在 `/<repo>/` 子路径下，所以 CI 注入 `EA_BASE=/embodied-autonomy-stack/`；
+  本地开发不设这个变量，base 就是 `/`。
+- `cleanUrls` 必须保持 `false`：Pages 不做目录重写，`/architecture` 会 404。
+- 换自定义域名时：仓库根放 `CNAME` 文件（内容为域名）+ DNS 加 CNAME 记录，
+  然后可以把 `EA_BASE` 去掉、base 回到 `/`。
 
 ## 设计约定
 

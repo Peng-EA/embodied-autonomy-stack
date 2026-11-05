@@ -53,8 +53,8 @@ L4 不是 LLM；LLM 是 L4 调用的**外部异步服务**，可插拔、可断�
 
 ## 文档站
 
-`site/` 是 VitePress 站点（深色终端风、等宽字体、可点击的分层架构图），部署在 Vercel。
-本地起服：`cd site && pnpm install && pnpm docs:dev`。
+`site/` 是 VitePress 站点（深色终端风、等宽字体、可点击的分层架构图），由 GitHub Actions 构建并发布到 GitHub Pages。
+站点地址：<https://peng-ea.github.io/embodied-autonomy-stack/> · 本地起服：`cd site && pnpm install && pnpm docs:dev`。
 
 站点**不复制** `docs/` 的正文，避免双份维护分裂；站内页面由 `docs/` 同步生成（第二步接入），
 在那之前导航指向 GitHub 原文。
