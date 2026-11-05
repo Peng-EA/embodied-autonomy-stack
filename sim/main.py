@@ -22,6 +22,7 @@ from pathlib import Path
 from . import config as C
 from .bus import SignalBus
 from .contracts import EventLog, now_ms
+from .counterfactual import probe_without_override
 from .dashboard import render
 from .env.world import World
 from .l1_homeostasis.layer import Homeostasis
@@ -75,8 +76,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--no-render", action="store_true")
     ap.add_argument("--trace", action="store_true", help="每 0.25s 打一行状态（调试用）")
+    ap.add_argument("--clearance-mode", choices=["raycast", "analytic"], default=None,
+                    help="感知方式；analytic 只用于对照（验证换成真实几何后行为是否变化）")
+    ap.add_argument("--no-counterfactual", action="store_true",
+                    help="关掉反事实推演（快，但没有真实抢占正确率）")
     args = ap.parse_args(argv)
     _init_console()
+
+    if args.clearance_mode:
+        C.CLEARANCE_MODE = args.clearance_mode
 
     cfg = C.RunConfig(baseline=args.baseline, duration_s=args.duration,
                       llm_disconnect_at=args.llm_disconnect, seed=args.seed,
@@ -92,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
         "duration_s": cfg.duration_s,
         "llm_disconnect_at": cfg.llm_disconnect_at,
         "preemption_enabled": cfg.preemption_enabled,
+        "clearance_mode": C.CLEARANCE_MODE,
+        "counterfactual": not args.no_counterfactual,
         "affect_modulating": cfg.affect_modulating,
         **_baseline_meta(cfg.baseline),
     }
@@ -130,6 +140,10 @@ def main(argv: list[str] | None = None) -> int:
     steps = int(cfg.duration_s * C.CONTROL_HZ)
     speed_sum = 0.0
     speed_n = 0
+    prev_target: tuple[float, float] | None = None
+    prev_overrides = 0
+    cf_total = 0
+    cf_should = 0
     charging = False
     done_before: float | None = None
     last_render = -1.0
@@ -143,7 +157,8 @@ def main(argv: list[str] | None = None) -> int:
         pos = world.pos
 
         # ---- 感知 → 分层（顺序即优先级：L1 → L2 → L3 → L4）
-        clearance = world.clearance()
+        clearance, obstacle_dir = world.sense_clearance()
+        escape_dir = (-obstacle_dir[0], -obstacle_dir[1])
         force = world.contact_force()
         charging = world.charger_distance() < C.CHARGER_REACH
         moving = world.speed > 0.05
@@ -156,13 +171,25 @@ def main(argv: list[str] | None = None) -> int:
             l1.battery = max(30.0, l1.battery - 0.02)
             sev = 0.0
         if cfg.layers_enabled["l2"]:
-            l2.tick(t, clearance, force, pos[1], l4.task, did)
+            l2.tick(t, clearance, force, escape_dir, l4.task, did)
+            if l2.overrides > prev_overrides:
+                prev_overrides = l2.overrides
+                if not args.no_counterfactual:
+                    cf = probe_without_override(world, prev_target)
+                    cf_total += 1
+                    cf_should += 1 if cf["collided"] else 0
+                    log.write(clock(), "CF", "counterfactual", f"cf{cf_total:02d}",
+                              value=1 if cf["collided"] else 0,
+                              detail=(f"would_collide={cf['collided']} "
+                                      f"t_hit={cf['t_hit']} min_clear={cf['min_clearance']} "
+                                      f"max_force={cf['max_force']}"))
         if cfg.layers_enabled["l3"]:
             l3.tick(t, 1 / C.CONTROL_HZ, l1.state(), clearance, charging, moving,
                     l4.goal_done(), did)
 
         # ---- L4 决定往哪走
         target, scale = l4.tick(t, 1 / C.CONTROL_HZ, pos)
+        prev_target = target
         if charging:                         # 已经在桩上：停住，别把桩顶出接触力
             world.brake()
         elif l2.active:                      # 反射否决：先躲
@@ -208,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
 
     elapsed = time.perf_counter() - t0
     needs_ratio = (l4.need_decisions / l4.decisions) if l4.decisions else 0.0
-    precision = 1.0 - (l2.collisions / l2.overrides) if l2.overrides else 0.0
+    precision = (cf_should / cf_total) if cf_total else None
     survival = None
     if cfg.llm_disconnect_at is not None:
         if done_before is None:
@@ -229,7 +256,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"L4 规划请求     {l4.plans}   被中断 {l4.aborts}   降级={'YES' if l4.degraded else 'no'}")
     print(f"平均速度        {speed_sum / max(1, speed_n):.3f} m/s")
     print(f"需求驱动占比    {needs_ratio:.2f}  (={l4.need_decisions}/{l4.decisions} 个决策)")
-    print(f"抢占正确率(代理) {precision:.2f}  (1 - 碰撞/否决；只是代理指标，正式评估见 docs/evaluation.md)")
+    if precision is None:
+        print("抢占正确率      未测（反事实推演被关闭或没有发生抢占）")
+    else:
+        print(f"抢占正确率      {precision:.2f}  = {cf_should}/{cf_total} 次否决"
+              f"「若没抢、1s 内会撞」—— 反事实推演，非代理指标")
+        print(f"误抢率          {1 - precision:.2f}")
     if survival is not None:
         print(f"断线后存活      {survival:.2f}s （从 {cfg.llm_disconnect_at}s 断开到计划完成）")
     elif cfg.llm_disconnect_at is not None:

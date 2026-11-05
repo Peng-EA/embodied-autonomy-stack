@@ -1,13 +1,13 @@
 # sim · 阶段 1 最小闭环（MuJoCo）
 
-> 状态：**能跑通的骨架**（不是已标定的实验装置）
+> 状态：**能跑通的骨架 + 两次实测**（感知口径、抢占正确率、阈值标定）
 > 目标：打通"需求 → 目标 → 规划 → 否决 → 完成"的数据流与抢占机制，**不追求控制性能**。
 
 ```text
         L1 稳态 ──broadcast──▶ L3 动机 ──goal_candidate──▶ L4 规划 ──需要语义──▶ LLM(外部)
             ▲                                                  │
             │                                  semantic_plan_request/result
-            └──────── outcome_event ◀── L2 反射 ◀── proximity ──┘
+            └──────── outcome_event ◀── L2 反射 ◀── raycast ────┘
                                         │
                                   reflex_override（硬中断，不需要许可）
 ```
@@ -24,22 +24,64 @@ sim/.venv/Scripts/python -m sim.main                      # 默认 B1，10 秒
 sim/.venv/Scripts/python -m sim.main --trace              # 每 0.25s 打一行状态
 sim/.venv/Scripts/python -m sim.main --llm-disconnect 3   # 3 秒切断 LLM，看降级
 sim/.venv/Scripts/python -m sim.main --baseline b2        # 关掉 L1 抢占（对照）
+sim/.venv/Scripts/python -m sim.main --clearance-mode analytic   # 对照：解析式感知
+sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈值
 ```
-
-`--no-render` 关掉面板，只要结果与日志。
 
 ## 目录
 
 | 路径 | 职责 |
 |---|---|
-| `env/scene.xml` | MuJoCo 场景：平面底盘、横在中间的墙、充电桩（**只做视觉**） |
-| `env/world.py` | 仿真器包装：只暴露位姿/速度/间隙/接触力；换真机只改这一层 |
+| `env/scene.xml` | 场景：平面底盘、横在中间的墙、充电桩（只做视觉，不参与碰撞） |
+| `env/world.py` | 仿真器包装：位姿/速度/**raycast 感知**/接触力；换真机只改这一层 |
 | `l1_homeostasis/` | 电量/温度/应力 → `homeostatic_broadcast`（20Hz 采样） |
-| `l2_reflex/` | 间隙/接触力 → `reflex_override`（迟滞 + 冷却），**无许可、直接置位** |
-| `l3_affect/` | 情绪向量（效价/唤醒/支配/好奇/恐惧）→ `affect_vector`、`goal_candidate` |
+| `l2_reflex/` | 射线间隙/接触力 → `reflex_override`（迟滞 + 冷却），**无许可、直接置位** |
+| `l3_affect/` | 情绪向量 → `affect_vector`、`goal_candidate`，并**真的调制速度** |
 | `l4_planning/` | 异步调 LLM、执行航点、被抢占时挂起、断线时降级 |
-| `contracts.py` | 与 `contracts/*.schema.json` 一一对应的数据结构 + JSONL 日志 |
-| `dashboard.py` | 终端 ASCII 面板（UTF-8 用框线，GBK 自动退成 `+-|`） |
+| `counterfactual.py` | 反事实推演：判断一次否决"该不该抢" |
+| `calibrate.py` | 阈值标定：`CLEARANCE_WARN` × 来速 的碰撞矩阵 |
+| `contracts.py` | 与 `contracts/*.schema.json` 对应的数据结构 + JSONL 日志 |
+| `dashboard.py` | 终端面板（UTF-8 用框线，GBK 自动退成 `+-|`） |
+
+## 三个已经做过实测的问题
+
+### ① 感知：为什么必须是 raycast
+
+`--clearance-mode analytic` 是早期实现（对"已知 AABB 墙"算解析距离），保留下来对照。
+同一条场景、同一组参数，只换感知方式：
+
+| 感知 | 最终电量 | 碰撞 | 否决 | 平均速度 |
+|---|---|---|---|---|
+| **raycast**（12 条射线，从车身表面起算） | **30.5%** | **0** | 1 | 0.601 m/s |
+| analytic（解析式，从车体中心起算） | 18.6% | **1** | 1 | 0.227 m/s |
+
+解析式那两个口径差 65 mm（起点不同），结果就是**触发晚了一步 → 蹭上墙 → 卡住**。
+这就是"感知口径必须和几何一致"的实证：不是审美问题，是行为问题。
+
+### ② 抢占正确率：用反事实推演，不用代理指标
+
+`docs/evaluation.md` 的定义是「若没抢，1 秒内会撞」。这里按字面实现（`counterfactual.py`）：
+否决发生的那一刻克隆物理状态，假设"没听见否决"继续按原计划开 1 秒，看会不会接触。
+
+```
+抢占正确率      1.00  = 1/1 次否决「若没抢、1s 内会撞」—— 反事实推演，非代理指标
+误抢率          0.00
+```
+
+之前的 `1 - 碰撞/否决` 是代理，现在日志里每次否决都会留一条 `CF counterfactual` 记录
+（`would_collide / t_hit / min_clear / max_force`），可复核。
+
+### ③ 阈值标定：`CLEARANCE_WARN` 有安全包线
+
+完整表见 [calibration.md](calibration.md)。关键结论：
+
+| 阈值 | 结果 |
+|---|---|
+| 0.08 m | 1.8 / 2.2 m/s 下各撞 1 次 → **太晚** |
+| 0.20 m | 全速度段 0 碰撞 → **实测边界** |
+| 0.36 m | 1.0 m/s 也抢 2 次 → **太早，误抢** |
+
+默认值因此定为 `CLEARANCE_WARN = 0.22 m`、`CLEARANCE_SAFE = 0.40 m`（迟滞 0.18 m）。
 
 ## 10 秒里会发生什么（B1）
 
@@ -47,44 +89,34 @@ sim/.venv/Scripts/python -m sim.main --baseline b2        # 关掉 L1 抢占（�
 |---|---|---|
 | 0–2.5s | 巡逻，电量从 28% 往下掉 | L4 执行 patrol 计划 |
 | ≈2.5s | 电量跌破 25%，广播 `battery_low` | L1 |
-| ≈2.5s | 生成 `seek_charger` 目标（优先级随 severity 上升） | L3 |
-| ≈2.6s | 调用 LLM（仿真时间 0.35s），拿到**天真直线路径** | L4 → Mock LLM |
-| ≈3.6s | 直线撞墙前 0.34m → `reflex_override`，计划被挂起 | L2 |
-| ≈3.9s | 重新规划，拿到**绕行路径**（这次带 avoid_obstacle 上下文） | L4 → Mock LLM |
-| ≈8.5s | 到达停靠区，开始充电 | L1 电量回升 |
-| ≈10s | 面板显示"充电中"，事件流里能看到完整的抢占链 | — |
+| ≈2.5s | 生成 `seek_charger`，优先级随 severity 上升 | L3 |
+| ≈2.6s | 调 LLM（仿真时间 0.35s），拿到**天真直线路径** | L4 → Mock LLM |
+| ≈3.6s | 射线间隙 < 0.22m → `reflex_override`，计划挂起 | L2 |
+| ≈3.9s | 重规划，拿到绕行路径（带 avoid_obstacle 上下文） | L4 → Mock LLM |
+| ≈8.5s | 到达停靠区开始充电 | L1 电量回升 |
 
-## 已验证（本仓库 CI 环境实测）
+## 已验证（实测）
 
 | 检查 | 结果 |
 |---|---|
-| 闭环跑通 | `充电完成=是`，B1 最终电量 ≈30% |
-| 抢占链 | `preempt` 事件带 `preempted_by=L2.reflex_override` |
-| 基线差异 | B1 ≈30.7% vs B2 ≈17.9%（无抢占 → 晚约 2 秒到桩） |
-| 断线降级 | `--llm-disconnect` → `降级=YES`，仍能到达桩 |
-| 日志 | 符合 `evals/log-format.md`：JSONL + `.meta.json`（含基线文件 sha256、commit） |
+| 闭环跑通 | `充电完成=是`，B1 最终电量 ≈30.5% |
+| 抢占链可审计 | `preempt` 事件带 `preempted_by=L2.reflex_override` |
+| 基线差异 | B1 ≈30.5% vs B2 ≈17.6%（无抢占 → 晚约 2 秒到桩） |
+| 断线降级 | `--llm-disconnect` → `降级=YES`，仍能到桩 |
+| 抢占正确率 | 反事实 1/1，误抢 0 |
+| 阈值有据 | 0.20 m 为 0 碰撞边界（见 calibration.md） |
 
 ## 刻意留着的坑（比"看起来能跑"更重要）
 
-1. **感知是简化的**：间隙用"车体到墙 AABB 的解析距离"，不是激光/深度。真机要换 `World.clearance()`。
-2. **底盘是平面关节**：没有轮子、没有悬挂、不会翻。真机模型整个换掉 XML，接口不变。
-3. **LLM 延迟是仿真时间**：为了可复现（跑 10 秒仿真不该等 10 秒），异步用"到点才可见"模拟，语义等价但不测真实网络抖动。
-4. **指标只是代理**：`抢占正确率 = 1 - 碰撞/否决` 不是 `docs/evaluation.md` 里的正式定义（正式版要做反事实对照）。
-5. **阈值全是起点值**：`config.py` 里的数没有一个是标定过的，`L2` 阈值必须来自硬件安全规格。
-
-## 对应契约
-
-| 代码 | 契约 |
-|---|---|
-| `contracts.HomeostaticBroadcast` | `contracts/homeostatic.schema.json` |
-| `contracts.AffectVector` | `contracts/affect_vector.schema.json` |
-| `contracts.GoalCandidates` / `SemanticPlan*` / `ReflexOverride` / `OutcomeEvent` | `contracts/signals.schema.json` |
-| `EventLog` | `evals/log-format.md` |
-| `RunConfig.apply_baseline()` | `evals/baselines/*.yaml` |
+1. **单障碍物**：一堵正对的墙。柱子、斜面、动态障碍（人）都没测。
+2. **迟滞宽度没标定**：0.18 m 是拍的。
+3. **每格只跑一次**：标定表没做重复采样，报不出置信区间。
+4. **LLM 延迟是仿真时间**：为保证可复现；测不到真实网络抖动。
+5. **阈值仍要硬件规格**：`STRESS_WARN`（85 N）必须来自真机安全规格，不是仿真能给的。
 
 ## 下一步
 
-- [ ] 间隙改用 MuJoCo raycast / 深度相机，验证 L2 在非解析几何下的行为
-- [ ] 抢占正确率做反事实对照（同种子跑两次：允许/禁止抢占）
-- [ ] 参数标定：L2 阈值、情绪衰减常数、电量模型
+- [ ] 多障碍物 / 偏角场景（`calibrate.py` 的 `OFFSET_GRID` 已留接口）
+- [ ] 迟滞宽度进网格；每格多次采样，用「该抢率」作目标函数
+- [ ] 感知换成真实传感器模型（射线加噪声、盲区）
 - [ ] 真机适配层（替换 `env/world.py`，其余不动）

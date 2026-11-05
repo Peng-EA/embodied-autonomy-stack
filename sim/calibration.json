@@ -1,0 +1,147 @@
+[
+  {
+    "warn_m": 0.08,
+    "by_speed": {
+      "1.0": {
+        "collisions": 0,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      },
+      "1.35": {
+        "collisions": 0,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      },
+      "1.8": {
+        "collisions": 1,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      },
+      "2.2": {
+        "collisions": 1,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      }
+    }
+  },
+  {
+    "warn_m": 0.14,
+    "by_speed": {
+      "1.0": {
+        "collisions": 0,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      },
+      "1.35": {
+        "collisions": 0,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      },
+      "1.8": {
+        "collisions": 0,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      },
+      "2.2": {
+        "collisions": 1,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      }
+    }
+  },
+  {
+    "warn_m": 0.2,
+    "by_speed": {
+      "1.0": {
+        "collisions": 0,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      },
+      "1.35": {
+        "collisions": 0,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      },
+      "1.8": {
+        "collisions": 0,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      },
+      "2.2": {
+        "collisions": 0,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      }
+    }
+  },
+  {
+    "warn_m": 0.28,
+    "by_speed": {
+      "1.0": {
+        "collisions": 0,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      },
+      "1.35": {
+        "collisions": 0,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      },
+      "1.8": {
+        "collisions": 0,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      },
+      "2.2": {
+        "collisions": 0,
+        "overrides": 1,
+        "cf_total": 1,
+        "cf_should": 1
+      }
+    }
+  },
+  {
+    "warn_m": 0.36,
+    "by_speed": {
+      "1.0": {
+        "collisions": 0,
+        "overrides": 2,
+        "cf_total": 2,
+        "cf_should": 1
+      },
+      "1.35": {
+        "collisions": 0,
+        "overrides": 2,
+        "cf_total": 2,
+        "cf_should": 1
+      },
+      "1.8": {
+        "collisions": 0,
+        "overrides": 2,
+        "cf_total": 2,
+        "cf_should": 1
+      },
+      "2.2": {
+        "collisions": 0,
+        "overrides": 3,
+        "cf_total": 3,
+        "cf_should": 1
+      }
+    }
+  }
+]

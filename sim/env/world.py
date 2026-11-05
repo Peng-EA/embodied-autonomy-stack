@@ -55,10 +55,57 @@ class World:
     def speed(self) -> float:
         return float(math.hypot(self.data.qvel[0], self.data.qvel[1]))
 
-    def clearance(self) -> float:
-        """到墙面的近似最小间距（米）。负值代表已经嵌进去。
+    def sense_clearance(self) -> tuple[float, tuple[float, float]]:
+        """射线感知：12 条水平射线从车身表面向外打，返回 (最近间隙, 障碍方向单位向量)。
 
-        简化：把车体当圆，取到墙 AABB 的最近距离，再减去车体半径。
+        为什么换成 raycast：解析式距离默认障碍是一面已知的 AABB 墙——那是"开卷考试"。
+        射线只看几何本身，换上任意障碍物（柱子、家具、人的腿）都成立，
+        这才是 L2 在真机上的输入形态。
+
+        - 起点在车身表面外 0.185m（略大于车体对边），所以测到的直接是"间隙"；
+        - flg_static=True 才看得见静态几何；bodyexclude 排除自身；
+        - contype/conaffinity=0 的物体（本场景的充电桩）对射线不可见 —— 与碰撞一致。
+        """
+        if C.CLEARANCE_MODE == "analytic":
+            d = self.clearance_analytic()
+            x, y = self.pos
+            return d, (0.0, -1.0 if y < C.WALL_Y else 1.0)
+
+        best = C.RAY_LEN
+        best_dir = (0.0, 0.0)
+        x, y = self.pos
+        for i in range(C.RAY_COUNT):
+            ang = 2.0 * math.pi * i / C.RAY_COUNT
+            ux, uy = math.cos(ang), math.sin(ang)
+            pnt = np.array([x + ux * C.RAY_START_R, y + uy * C.RAY_START_R, 0.11], dtype=np.float64)
+            vec = np.array([ux, uy, 0.0], dtype=np.float64)
+            # geomid/normal 在绑定里没有默认值，必须显式传 None
+            dist = mujoco.mj_ray(self.model, self.data, pnt, vec, None, True, self.robot, None)
+            if dist < 0:            # 没打到东西
+                continue
+            if dist < best:
+                best = dist
+                best_dir = (ux, uy)
+        return float(best), best_dir
+
+    def clone(self) -> "World":
+        """复制当前物理状态（反事实推演用）。"""
+        w = World.__new__(World)
+        w.model = self.model
+        w.data = mujoco.MjData(self.model)
+        w.robot = self.robot
+        w.robot_geom = self.robot_geom
+        w.floor_geom = self.floor_geom
+        w.data.qpos[:] = self.data.qpos
+        w.data.qvel[:] = self.data.qvel
+        w.data.time = self.data.time
+        w.data.xfrc_applied[:] = self.data.xfrc_applied
+        mujoco.mj_forward(w.model, w.data)
+        return w
+
+    def clearance_analytic(self) -> float:
+        """解析式距离：只对"已知 AABB 墙"成立，留作对照基线。
+
         真机请换成激光/深度实测——这里只是让 L2 有东西可看。
         """
         x, y = self.pos
@@ -100,7 +147,7 @@ class World:
         dx, dy = target[0] - x, target[1] - y
         dist = math.hypot(dx, dy) or 1e-6
 
-        vmax = 1.35 * speed_scale
+        vmax = C.MAX_SPEED * speed_scale
         v_des = min(C.DRIVE_KP * dist, vmax)
         ux, uy = dx / dist, dy / dist
 
