@@ -1,2 +1,13 @@
+# pnpm 11 的配置集中在这里（package.json 的 pnpm 字段已不再被读取）
+
+# 构建脚本：只批准 esbuild（其二进制来自可选依赖，脚本本身无害）
 allowBuilds:
   esbuild: true
+
+# 关于 minimumReleaseAge（供应链隔离期）：
+# CI 首次运行失败于 ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION
+#   —— vue@3.5.45 发布仅 3h，被 pnpm 默认的 24h 隔离期拦下。
+# 实测：本 key 写在这个文件里不被 pnpm 11.28 采纳（config get 仍读到 0），
+# 因此改为在 CI 命令行显式传 `--config.minimumReleaseAge=0`（见 docs-site.yml）。
+# 取舍：放弃 24h 隔离，换取"本地与 CI 解析完全一致 + 构建可复现"；
+# 代价是失去防投毒的时间窗保护——依赖固定靠 lockfile，不靠时间。

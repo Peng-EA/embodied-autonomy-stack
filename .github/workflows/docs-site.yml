@@ -40,7 +40,10 @@ jobs:
 
       - name: Install
         working-directory: site
-        run: pnpm install --frozen-lockfile
+        # pnpm 11 在干净环境下默认 minimumReleaseAge=1440（24h 隔离期），
+        # 会拦住刚发布的包（本次是 vue@3.5.45 发布 3h）。
+        # 这里显式对齐本地的 0——依赖锁定靠 lockfile，不靠时间窗。
+        run: pnpm install --frozen-lockfile --config.minimumReleaseAge=0
 
       - name: Build
         working-directory: site
