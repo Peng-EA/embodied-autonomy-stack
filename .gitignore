@@ -29,3 +29,7 @@ site/safety.md
 site/roadmap.md
 site/glossary.md
 site/public/assets/
+
+# 仿真：本地虚拟环境与运行日志
+sim/.venv/
+logs/

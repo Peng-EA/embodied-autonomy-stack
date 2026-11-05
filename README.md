@@ -36,6 +36,7 @@ L4 不是 LLM；LLM 是 L4 调用的**外部异步服务**，可插拔、可断�
 | [`docs/`](docs/) | 正文：为什么、架构、契约、评价、安全、路线图 | [docs/README.md](docs/README.md) |
 | [`contracts/`](contracts/) | 层间信号的 JSON Schema + 样例（机器可校验） | [contracts/README.md](contracts/README.md) |
 | [`evals/`](evals/) | 四条基线配置、指标定义、复现日志格式 | [evals/README.md](evals/README.md) |
+| [`sim/`](sim/) | MuJoCo 阶段 1 最小闭环（L1–L4 跑通 + 抢占 + 降级） | [sim/README.md](sim/README.md) |
 | [`site/`](site/) | 文档站（VitePress，深色 · 等宽 · 架构图） | [site/README.md](site/README.md) |
 | [`.github/`](.github/) | Issue / PR 模板 | [架构 RFC 模板](.github/ISSUE_TEMPLATE/architecture-rfc.yml) |
 
@@ -58,6 +59,15 @@ L4 不是 LLM；LLM 是 L4 调用的**外部异步服务**，可插拔、可断�
 
 站点**不复制** `docs/` 的正文，避免双份维护分裂；站内页面由 `docs/` 同步生成（第二步接入），
 在那之前导航指向 GitHub 原文。
+
+## 跑一遍
+
+```bash
+python -m venv sim/.venv && sim/.venv/Scripts/python -m pip install -r sim/requirements.txt
+sim/.venv/Scripts/python -m sim.main          # 10 秒闭环，终端面板实时显示 L1–L4
+```
+
+没有 GPU、不需要 API key：LLM 是 mock 的，验证的是**边界**（异步、可断线、可被抢占），不是模型能力。
 
 ## 快速开始
 
