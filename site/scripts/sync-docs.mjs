@@ -79,12 +79,12 @@ function rewriteLinks(text, pageFile) {
   }
 
   // 2b) ADR 不在站点里渲染（避免又一套"文档站内文档"），统一指到 GitHub
-  out = out.replace(/\]\((?:\.\/)?adr\/([^)\s]*)\)/g, `](${BLOB}/docs/adr/$1)`)
+  out = out.replace(/\]\((?:\.\.?\/)?adr\/([^)\s]*)\)/g, `](${BLOB}/docs/adr/$1)`)
   // 2c) blog/ 目录链接 → 站点路由（blog 是站内页）
   out = out.replace(/\]\((?:\.\/)?blog\/(?:README\.md)?\)/g, '](/blog/)')
 
   // 3) 同目录 xxx.md → /route（按页面所在目录解析）
-  out = out.replace(/\]\((?:\.\/)?([A-Za-z0-9_-]+)\.md(#[^)\s]*)?\)/g, (m, name, anchor) => {
+  out = out.replace(/\]\((?:\.\/)?([A-Za-z0-9_/-]+)\.md(#[^)\s]*)?\)/g, (m, name, anchor) => {
     const route = routeFor(posix.join(pageDir, `${name}.md`))
     return route ? `](/${route}${anchor || ''})` : m
   })
