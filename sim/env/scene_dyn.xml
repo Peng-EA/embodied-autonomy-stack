@@ -1,0 +1,64 @@
+<!--
+  EA Stack · 动态场景（stage1 + 一个做简谐运动的干扰体）
+
+  与 scene.xml 的区别只有一件事：多了一个 mocap 干扰体。
+  为什么单独建文件而不是直接改 scene.xml：
+  1. scene.xml 是现有仿真与历史日志的基准，动它会让旧数据不可比（ADR 的约定）；
+  2. mocap 体是"无限质量"的推手，只应该出现在需要它的实验里。
+
+  mocap 体的用法：主循环每步写 data.mocap_pos，物理引擎把它当运动学刚体，
+  它能推机器人、推杯子，但不会被推回来 —— 这就是"不可预测的人"的最小近似。
+-->
+<mujoco model="ea_stage1_dyn">
+  <compiler angle="degree" autolimits="true"/>
+  <option timestep="0.002" integrator="implicitfast" cone="elliptic" impratio="10"/>
+  <size njmax="200" nconmax="64"/>
+
+  <visual>
+    <global offwidth="640" offheight="480"/>
+    <quality shadowsize="2048"/>
+  </visual>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.09 0.13 0.16" rgb2="0.13 0.18 0.22"
+             width="256" height="256"/>
+    <material name="grid" texture="grid" texrepeat="8 8" reflectance="0.05"/>
+  </asset>
+
+  <worldbody>
+    <light name="key" pos="0 -1 3" dir="0 0.3 -1" diffuse="0.7 0.7 0.7"/>
+    <geom name="floor" type="plane" size="6 6 0.05" material="grid"/>
+
+    <!-- 机器人：平面底盘（两个 slide 关节）。qpos 布局必须是 [x, y] 打头，
+         上层（World.pos）只认这两个分量；新增关节一律往后排。 -->
+    <body name="robot" pos="0 0 0.11">
+      <joint name="robot_x" type="slide" axis="1 0 0" damping="1.2"/>
+      <joint name="robot_y" type="slide" axis="0 1 0" damping="1.2"/>
+      <geom name="robot_geom" type="box" size="0.16 0.12 0.09" mass="6.0"
+            rgba="0.21 0.82 0.50 1" friction="0.18 0.01 0.01"/>
+      <site name="robot_center" pos="0 0 0" size="0.015"/>
+      <site name="robot_front" pos="0.16 0 0" size="0.012" rgba="1 1 1 1"/>
+    </body>
+
+    <!-- 充电桩：只做视觉，不参与碰撞（与 scene.xml 一致） -->
+    <body name="charger" pos="0 1.6 0.16">
+      <geom name="charger_pad" type="cylinder" size="0.3 0.03" rgba="0.22 0.55 1.0 1"
+            contype="0" conaffinity="0"/>
+      <geom name="charger_pole" type="box" size="0.05 0.05 0.28" pos="0 0 0.3"
+            rgba="0.22 0.55 1.0 1" contype="0" conaffinity="0"/>
+      <site name="charger_site" pos="0 0 0" size="0.02"/>
+    </body>
+
+    <!-- 障碍：横在中间的墙（保留，服务"向前推进 2m"这种语义合法但物理作死的指令） -->
+    <body name="obstacle" pos="0 0 0.25">
+      <geom name="obstacle_wall" type="box" size="0.9 0.06 0.25" rgba="0.85 0.45 0.18 1"/>
+    </body>
+
+    <!-- 动态干扰体（mocap）：x 方向简谐，扫过 y≈1.05 的走廊。
+         位置由 DynWorld.advance_intruder(t) 每步写入，不在 XML 里自带运动。 -->
+    <body name="intruder" mocap="true" pos="0.7 1.05 0.14">
+      <geom name="intruder_geom" type="box" size="0.12 0.12 0.14" rgba="0.95 0.30 0.35 0.85"
+            friction="0.6 0.01 0.01" condim="3"/>
+    </body>
+  </worldbody>
+</mujoco>

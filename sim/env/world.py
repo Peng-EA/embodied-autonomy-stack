@@ -30,6 +30,7 @@ class World:
         self.robot = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "robot")
         self.robot_geom = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_geom")
         self.floor_geom = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
+        self.geom_groups: np.ndarray | None = None   # None=全部；子类可收紧
         self.reset()
 
     # ------------------------------------------------------------ 基础
@@ -80,7 +81,8 @@ class World:
             pnt = np.array([x + ux * C.RAY_START_R, y + uy * C.RAY_START_R, 0.11], dtype=np.float64)
             vec = np.array([ux, uy, 0.0], dtype=np.float64)
             # geomid/normal 在绑定里没有默认值，必须显式传 None
-            dist = mujoco.mj_ray(self.model, self.data, pnt, vec, None, True, self.robot, None)
+            dist = mujoco.mj_ray(self.model, self.data, pnt, vec, self.geom_groups,
+                                 True, self.robot, None)
             if dist < 0:            # 没打到东西
                 continue
             if dist < best:

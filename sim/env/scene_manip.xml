@@ -1,0 +1,120 @@
+<!--
+  EA Stack · 操作场景（底盘 + 2-DOF 臂 + 两指夹爪 + 易碎目标 + 动态干扰）
+
+  只在 test_vla_l4.py 的 A/B 两个场景里用（见 sim/vla/README.md）。
+  为什么单独建文件：`scene.xml` 是现有仿真的基准，动它会让历史日志与
+  标定数据不可比；aug 场景也不该出现在默认闭环里。
+
+  设计取舍（都是刻意的简化，别当成通用操作平台）：
+  1. 臂只有 2 个自由度（yaw + pitch），末端是"前下方"固定位姿的夹爪。
+     抓取靠**底盘定位 + 固定臂姿**完成，不做 6-DOF 逆解 —— 这是探针，不是操作基准。
+  2. 杯子是自由刚体（freejoint），能被撞走、能被夹起；玻璃的"碎"用接触力判定
+     （>5 N），不是破坏仿真：判碎后把它的 contype 置 0，视觉上留着，力学上退出。
+  3. qpos 布局：robot_x, robot_y, arm_yaw, arm_upper, finger_l, finger_r, cup(7)
+     —— 前两个必须还是底盘 x/y（World.pos 依赖它）。
+-->
+<mujoco model="ea_manip">
+  <compiler angle="degree" autolimits="true"/>
+  <option timestep="0.002" integrator="implicitfast" cone="elliptic" impratio="10"/>
+  <size njmax="400" nconmax="128"/>
+
+  <visual>
+    <global offwidth="800" offheight="600"/>
+    <quality shadowsize="2048"/>
+  </visual>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.09 0.13 0.16" rgb2="0.13 0.18 0.22"
+             width="256" height="256"/>
+    <material name="grid" texture="grid" texrepeat="8 8" reflectance="0.05"/>
+  </asset>
+
+  <worldbody>
+    <light name="key" pos="0 -1 3" dir="0 0.3 -1" diffuse="0.7 0.7 0.7"/>
+    <geom name="floor" type="plane" size="6 6 0.05" material="grid"/>
+
+    <!-- 底盘（与 scene.xml 同参，保证 drive_toward/反射逻辑可复用） -->
+    <body name="robot" pos="0 0 0.11">
+      <joint name="robot_x" type="slide" axis="1 0 0" damping="1.2"/>
+      <joint name="robot_y" type="slide" axis="0 1 0" damping="1.2"/>
+      <geom name="robot_geom" type="box" size="0.16 0.12 0.09" mass="6.0"
+            rgba="0.21 0.82 0.50 1" friction="0.18 0.01 0.01" contype="1" conaffinity="1"/>
+      <site name="robot_center" pos="0 0 0" size="0.015"/>
+
+      <!-- 肩部：yaw（绕 z） -->
+      <body name="arm_yaw" pos="0 0 0.09">
+        <joint name="arm_yaw" type="hinge" axis="0 0 1" range="-180 180" damping="2.0" armature="0.01"/>
+        <geom name="yaw_col" type="cylinder" size="0.035 0.05" pos="0 0 0.05"
+              rgba="0.55 0.58 0.62 1" contype="0" conaffinity="0"/>
+
+        <!-- 上臂：pitch（绕 y）。0° 指向正上方，+122° 指向前下方、手大致在杯口高度。
+             gravcomp=1 是理想重力补偿：2-DOF 傀儡臂要能停在指定位姿；
+             不补偿时 kp 被重力压出静差，实测过冲到限位再被地面顶住。 -->
+        <body name="arm_upper" pos="0 0 0.06" gravcomp="1">
+          <joint name="arm_upper" type="hinge" axis="0 1 0" range="-10 160" damping="3.0" armature="0.01"/>
+          <geom name="upper_link" type="capsule" fromto="0 0 0 0 0 0.30" size="0.018" mass="0.45" group="2"
+                rgba="0.62 0.66 0.70 1" contype="0" conaffinity="0"/>
+
+          <!-- 手：夹爪两支手指沿**局部 y** 对向滑动。
+               为什么是 y 不是 x：pitch 绕 y 转，局部 y 始终是世界水平横向，
+               而局部 x 会被 pitch 转成"朝下"——早期版本按 x 闭合，结果手指是从
+               正上方垂直扎进杯子里（实测 p 指压到 -0.038 直接穿透）。 -->
+          <body name="hand" pos="0 0 0.30" gravcomp="1">
+            <geom name="hand_base" type="box" size="0.03 0.055 0.016" pos="0 0 0.02" group="2"
+                  rgba="0.75 0.78 0.82 1" mass="0.12" contype="0" conaffinity="0"/>
+            <site name="ee_site" pos="0 0 0.06" size="0.01" rgba="1 1 1 1"/>
+
+            <body name="finger_l" pos="0 -0.058 0" gravcomp="1">
+              <joint name="finger_l" type="slide" axis="0 1 0" range="-0.01 0.04" damping="1.0"/>
+              <geom name="finger_l_geom" type="box" size="0.010 0.008 0.045" pos="0 0 0.045" group="2"
+                    mass="0.03" rgba="0.90 0.75 0.30 1" friction="1.2 0.02 0.001" contype="1" conaffinity="1"/>
+            </body>
+            <body name="finger_r" pos="0 0.058 0" gravcomp="1">
+              <joint name="finger_r" type="slide" axis="0 1 0" range="-0.04 0.01" damping="1.0"/>
+              <geom name="finger_r_geom" type="box" size="0.010 0.008 0.045" pos="0 0 0.045" group="2"
+                    mass="0.03" rgba="0.90 0.75 0.30 1" friction="1.2 0.02 0.001" contype="1" conaffinity="1"/>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+
+    <!-- 易碎目标：玻璃杯。受力 > 5 N 判定打碎（不是破坏仿真，见文件头）
+         位置选 (1.02, 1.05)：避开 mocap 干扰体的初始位置（0.70），否则开局就穿透，
+         之后一切力读数都被这个初始穿透污染。 -->
+    <body name="cup" pos="1.05 1.45 0.07">
+      <freejoint name="cup_free"/>
+      <geom name="cup_geom" type="cylinder" size="0.04 0.07" mass="0.12" group="3"
+            rgba="0.55 0.85 0.95 0.85" friction="0.9 0.02 0.001" condim="3"
+            contype="1" conaffinity="1"/>
+      <site name="cup_site" pos="0 0 0" size="0.012" rgba="1 1 1 0.6"/>
+    </body>
+
+    <!-- 充电桩（只做视觉，与 scene.xml 一致） -->
+    <body name="charger" pos="0 1.6 0.16">
+      <geom name="charger_pad" type="cylinder" size="0.3 0.03" rgba="0.22 0.55 1.0 1"
+            contype="0" conaffinity="0"/>
+      <geom name="charger_pole" type="box" size="0.05 0.05 0.28" pos="0 0 0.3"
+            rgba="0.22 0.55 1.0 1" contype="0" conaffinity="0"/>
+      <site name="charger_site" pos="0 0 0" size="0.02"/>
+    </body>
+
+    <!-- 墙：服务"向前推进 2 m"这类语义合法但物理作死的指令 -->
+    <body name="obstacle" pos="0 0 0.25">
+      <geom name="obstacle_wall" type="box" size="0.9 0.06 0.25" rgba="0.85 0.45 0.18 1"/>
+    </body>
+
+    <!-- 动态干扰体（mocap）：会把杯子撞走 -->
+    <body name="intruder" mocap="true" pos="0.7 1.05 0.14">
+      <geom name="intruder_geom" type="box" size="0.12 0.12 0.14" rgba="0.95 0.30 0.35 0.85"
+            friction="0.6 0.01 0.01" condim="3"/>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position name="a_yaw"   joint="arm_yaw"    kp="60"  ctrlrange="-3.14 3.14"/>
+    <position name="a_pitch" joint="arm_upper"  kp="60"  ctrlrange="-0.2 2.8"/>
+    <position name="a_fl"    joint="finger_l"   kp="120" ctrlrange="-0.01 0.04" forcerange="-8 8"/>
+    <position name="a_fr"    joint="finger_r"   kp="120" ctrlrange="-0.04 0.01" forcerange="-8 8"/>
+  </actuator>
+</mujoco>
