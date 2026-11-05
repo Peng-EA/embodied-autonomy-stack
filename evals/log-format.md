@@ -49,6 +49,29 @@ logs/<date>-<baseline_id>-<scenario_id>.jsonl
 {"t_ms":2100,"layer":"L2","event":"outcome_event","decision_id":"d0002","value":0.0,"detail":"no slip"}
 ```
 
+## 扩展事件族：`vla_probe`（双模型探针）
+
+`sim/test_vla_l4.py` 需要记录跨层时序，标准四字段不够。这些行仍然遵守上面的
+"t_ms = 仿真时间、单调递增、不覆盖"三条规则，只是额外带以下键（**只在这个事件族里允许**）：
+
+| 额外键 | 含义 |
+|---|---|
+| `gen` | 请求代际号（ADR-0005） |
+| `endpoint` | 端点 URL（跨机调试要能看出连的是谁） |
+| `backend` | L2 后端：`scripted` / `ollama-act` |
+| `latency_ms` | 该次推理的墙钟耗时 |
+| `age_ms` | 动作块在消费时刻已存在多久（仿真时间口径） |
+| `stale` / `stale_m` | L4 结果是否过期、状态漂移量（米） |
+| `codes` | 校验失败码（`parse_error` / `schema_error` / `unsupported_skill` / `out_of_bounds` / `inside_obstacle` / `unreachable_now`） |
+| `degraded` | 是否因超时/异常回退到 scripted |
+| `fault` | 注入的故障类型（如 `l4_endpoint_down`） |
+
+一行示例（真跑出来的）：
+
+```jsonl
+{"t_ms":12030,"layer":"L4","event":"plan_adopted","decision_id":"g3","value":0.86,"detail":"action=goto target=(0.00,1.60) latency_ms=5487 stale=1 stale_m=0.86"}
+```
+
 ## 规则
 
 1. **不要记录原始音视频路径**，只记结论与时间戳（隐私要求见 [../docs/safety.md](../docs/safety.md)）。

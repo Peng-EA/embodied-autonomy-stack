@@ -49,6 +49,8 @@ README 的「主张」是一句话结论；ADR 是那句结论为什么成立、
 | [0002](0002-llm-as-external-service.md) | LLM 是 L4 调用的外部异步服务，不是 L4 本身 | 已接受 |
 | [0003](0003-baseline-definitions.md) | 四条基线的定义与"关掉什么" | 已接受（含已知不公平） |
 | [0004](0004-l1-homeostatic-only.md) | L1 只做 homeostatic，allostatic 暂不做 | 已接受（**登记为缺口**） |
+| [0005](0005-plan-generation-token.md) | `semantic_plan_*` 增加代际号 `gen`，迟到结果作废 | 已接受 |
+| [0006](0006-inference-endpoints-as-config.md) | 推理端点外置为配置，单机是"端点在本机"的特例 | 已接受 |
 
 ## 约定
 

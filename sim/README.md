@@ -12,6 +12,21 @@
                                   reflex_override（硬中断，不需要许可）
 ```
 
+## 双模型探针（独立于主闭环）
+
+`sim/vla/` + `sim/test_vla_l4.py` 是一个**单独的实验台**：L4 走真 Ollama（JSON Schema 约束、
+可跨机），L2 走可替换后端（`VLABackend`：默认规则代理，可切 `ollama-act`），
+物理环 100 Hz 永不等推理。它测的是跨层代价，不是任务能力。
+
+```bash
+python -m sim.test_vla_l4 --provider fake --scene stage1 --fast --no-render   # 离线自检
+python -m sim.test_vla_l4 --provider ollama --scene manip --duration 35 --no-render
+```
+
+边界与实测数字见 [vla/README.md](vla/README.md)：**物理与 L4 是真的，L2 的策略是规则代理**。
+主闭环（`sim.main`）不依赖它，也不依赖 `requests`。
+
+
 ## 跑起来
 
 ```bash

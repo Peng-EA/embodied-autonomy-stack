@@ -57,3 +57,25 @@ jobs:
           ls -1 logs/*.jsonl
           grep -q '"event": "summary"' logs/*.jsonl
           grep -q '"event": "reflex_override"' logs/*.jsonl || echo "本次没有触发反射（合法，只做提示）"
+
+  vla-probe:
+    name: vla probe（离线，不需要模型）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: 安装依赖
+        run: python -m pip install --upgrade pip && python -m pip install -r sim/requirements.txt
+      # 用进程内的假 Ollama（真 HTTP、真端口），所以 CI 不需要 GPU、不需要模型。
+      # 注意：不要在这里写 heredoc —— bash 的结束符必须顶格，YAML block 里有缩进会失效。
+      - name: 探针跑完并产出六项指标
+        run: |
+          python -m sim.test_vla_l4 --provider fake --scene stage1 --duration 12 --fast --no-render --report /tmp/vla.json
+          python -c "import json;d=json.load(open('/tmp/vla.json'));ks=('M1_stale_adoption','M2_l2_closed_loop','M3_cross_layer','M4_preempt_residual','M5_transport','M6_physics');miss=[k for k in ks if k not in d];assert not miss,('缺指标',miss);assert d['M5_transport']['n']>0,'L4 一次请求都没发生';assert d['M2_l2_closed_loop']['chunks']>0,'L2 没产出动作块';print('M1',d['M1_stale_adoption'],'n_l4',d['M5_transport']['n'],'chunks',d['M2_l2_closed_loop']['chunks'])"
+      - name: 假服务必须能触发 L2 降级（fake-mode=timeout）
+        run: |
+          python -m sim.test_vla_l4 --provider fake --fake-mode timeout --l4-timeout-ms 100 \n            --scene stage1 --duration 8 --fast --no-render --report /tmp/vla_to.json
+          python -c "import json;d=json.load(open('/tmp/vla_to.json'));t=d['M5_transport']['timeouts'];n=d['M5_transport']['n'];print('timeouts =',t,'n =',n);assert t>0,'假服务故意 hang，客户端必须记到超时'"
