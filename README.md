@@ -36,6 +36,7 @@ L4 不是 LLM；LLM 是 L4 调用的**外部异步服务**，可插拔、可断�
 | [`docs/`](docs/) | 正文：为什么、架构、契约、评价、安全、路线图 | [docs/README.md](docs/README.md) |
 | [`contracts/`](contracts/) | 层间信号的 JSON Schema + 样例（机器可校验） | [contracts/README.md](contracts/README.md) |
 | [`evals/`](evals/) | 四条基线配置、指标定义、复现日志格式 | [evals/README.md](evals/README.md) |
+| [`site/`](site/) | 文档站（VitePress，深色 · 等宽 · 架构图） | [site/README.md](site/README.md) |
 | [`.github/`](.github/) | Issue / PR 模板 | [架构 RFC 模板](.github/ISSUE_TEMPLATE/architecture-rfc.yml) |
 
 **为什么先有 schema 再有代码**：表是给人读的，schema 是给实现和 CI 读的。
@@ -49,6 +50,14 @@ L4 不是 LLM；LLM 是 L4 调用的**外部异步服务**，可插拔、可断�
 - 怎么证明"有效"、和谁比 → [docs/evaluation.md](docs/evaluation.md) · [evals/](evals/)
 - 情绪会不会影响安全 → [docs/safety.md](docs/safety.md)
 - 下一步做什么 → [docs/roadmap.md](docs/roadmap.md)
+
+## 文档站
+
+`site/` 是 VitePress 站点（深色终端风、等宽字体、可点击的分层架构图），部署在 Vercel。
+本地起服：`cd site && pnpm install && pnpm docs:dev`。
+
+站点**不复制** `docs/` 的正文，避免双份维护分裂；站内页面由 `docs/` 同步生成（第二步接入），
+在那之前导航指向 GitHub 原文。
 
 ## 快速开始
 

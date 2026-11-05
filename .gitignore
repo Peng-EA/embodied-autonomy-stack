@@ -12,3 +12,9 @@ Thumbs.db
 # 仿真输出（后续 v0.1 demo 用）
 runs/
 logs/
+
+# 文档站（VitePress）
+site/node_modules/
+site/.vitepress/cache/
+site/.vitepress/dist/
+*.local
