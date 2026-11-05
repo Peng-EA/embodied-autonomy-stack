@@ -303,7 +303,7 @@ const yOf = (i) => Y0 + i * (H + GAP)
     </svg>
 
     <div class="ea-diagram-hint">
-      点击任一层打开其 JSON Schema 契约 · 时间尺度即抢占优先级：L1 &gt; L2 &gt; L3 &gt; L4
+      点击任一层打开其 JSON Schema 契约 · 时间尺度即抢占优先级：L1 &gt; L2 &gt; L3 &gt; L4 · 窄屏可横向滑动
     </div>
   </div>
 </template>

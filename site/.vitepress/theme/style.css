@@ -104,8 +104,10 @@ body {
 
 .ea-kicker {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px 10px;
+  max-width: 100%;
   font-size: 11px;
   letter-spacing: 0.18em;
   color: var(--ea-muted);
@@ -485,3 +487,18 @@ body {
 }
 
 .ea-hero + h2 { margin-top: 26px; padding-top: 0; border-top: 0; }
+
+/* ---------- 窄屏 ---------- */
+@media (max-width: 900px) {
+  .ea-spec { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ea-spec > div:last-child { grid-column: 1 / -1; }
+}
+@media (max-width: 720px) {
+  .ea-hero { padding: 52px 0 28px; }
+  .ea-kicker .ea-dim { display: none; }
+  .ea-kicker { font-size: 10px; letter-spacing: 0.12em; }
+  .ea-title { font-size: clamp(30px, 9vw, 44px); }
+  .ea-sub { font-size: 13.5px; }
+  .ea-actions { flex-direction: column; align-items: stretch; }
+  .ea-btn { justify-content: center; }
+}
