@@ -77,6 +77,7 @@ class SemanticPlanRequest:
     request_id: str
     goal: str
     timeout_ms: int
+    gen: int = 0                       # 代际号，见 ADR-0005
     context: dict[str, Any] = field(default_factory=dict)
     signal: str = "semantic_plan_request"
     source: str = "L4"
@@ -89,6 +90,7 @@ class SemanticPlanResult:
     plan: list[tuple[float, float]]
     degraded: bool
     latency_ms: int
+    gen: int = 0                       # 回显请求代际；与当前不一致即作废
     signal: str = "semantic_plan_result"
     source: str = "LLM"
     timestamp_ms: int = 0

@@ -1,3 +1,5 @@
 mujoco>=3.2,<4
 numpy>=1.26
 pyyaml>=6.0
+# 探针（sim/test_vla_l4.py）调用 Ollama 用；主闭环不依赖它
+requests>=2.31

@@ -107,6 +107,11 @@
           "minimum": 1,
           "description": "超时值 TBD"
         },
+        "gen": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "代际号：抢占时递增；结果必须回显，不匹配即作废（ADR-0005）"
+        },
         "timestamp_ms": {
           "type": "integer",
           "minimum": 0
@@ -144,6 +149,11 @@
         "degraded": {
           "type": "boolean",
           "description": "true = 本地降级策略产出，非 LLM 结果"
+        },
+        "gen": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "回显请求的代际号；与 L4 当前代际不一致的结果必须丢弃（ADR-0005）"
         },
         "timestamp_ms": {
           "type": "integer",

@@ -1,0 +1,25 @@
+# 推理端点配置：localhost 与局域网 IP 走同一套代码（ADR-0006）
+#
+# 优先级：命令行 > 环境变量 > 本文件 > 内置默认
+#   环境变量：EA_L4_URL / EA_L4_MODEL / EA_L2_URL / EA_L2_MODEL
+#   命令行：  --l4-url / --l4-model / --l2-url / --l2-model
+#
+# 双机跑法（笔记本 = RTX 3050Ti）：
+#   1. 笔记本上 ollama serve，并设 OLLAMA_HOST=0.0.0.0:11434
+#   2. 笔记本上 ollama pull moondream            # L2 视觉，1.8B，约 1.7 GB
+#   3. 把下面的 base_url 改成笔记本的局域网 IP（ipconfig 看 192.168.x.x）
+#   4. 主机侧先自检：python -m sim.vla.preflight --l4-url http://<IP>:11434
+#
+# 注意：这里只放地址与模型名，不放任何凭据。
+
+l4:
+  base_url: "http://127.0.0.1:11434"
+  model: "qwen2.5:7b"           # 本机已有；也可换成笔记本上的 qwen3:4b
+  timeout_ms: 20000             # 跨机时给宽一点：一次结构化规划要 1-3 s
+  num_gpu: -1                   # 争抢测试用 0 强制 CPU
+
+l2:
+  base_url: "http://127.0.0.1:11434"
+  model: "moondream"            # 视觉后端；未 pull 时自动回退 scripted
+  timeout_ms: 400               # L2 时间尺度：超过这个就不该等它
+  num_gpu: -1
