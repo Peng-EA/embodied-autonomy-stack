@@ -13,10 +13,31 @@
 ```bash
 cd testbed
 npm install
-npm run dev        # 浏览器里的实时栈：场景 / 基线 / 延迟可切
+npm run dev        # 两个页面：/index.html（技术台）· /console.html（演示台）
 npm run bench      # headless 批跑：场景 x 基线 x 延迟 x seed
 npm test           # 确定性 / 过期策略 / 区间估计
 ```
+
+## 演示台（`console.html`）
+
+![演示台](../docs/assets/testbed-console.png)
+
+按参考视频（HAST-SEC 那两支）复刻的**演示形态**：左边是房间里的角色与气泡，右边是
+指标卡（待机抖动 / 语义延迟 / 控制延迟）、两个环形量表（认知负载 / 任务进度）、
+对话控制与会话记录，下面是三条实时曲线，底部是章节字幕。
+
+现状与边界：
+
+| 部分 | 状态 |
+|---|---|
+| 布局 / 交互 / 指标面板 / 章节字幕 | 已有，可点、可对话、可切章节 |
+| 角色 | **程序化占位**（胶囊 + 球，非 VRM）；有眨眼、呼吸、行走、挥手、坐下 |
+| 房间 | 程序化几何（墙 / 窗 / 床 / 桌 / 架），不是扫描资产 |
+| 指标数值 | **演示数据**，来自合成信号，不是 `src/core/` 的真实遥测 |
+| 与物理栈的接线 | 未接：`console.html` 与 `index.html` 目前是两条互不相干的线 |
+
+升级路径：把 `src/console/main.ts` 里的 `char` 换成 VRM（`@pixiv/three-vrm` 已在依赖里，
+但角色资产需要单独放），把 `sample()` 的合成信号换成 `src/core` 的 `Sim` 采样。
 
 ## 设计（三层，各管一件事）
 

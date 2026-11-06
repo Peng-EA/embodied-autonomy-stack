@@ -11,7 +11,8 @@
     "test": "node --import tsx --test tests/core.test.ts",
     "bench": "tsx src/bench/run.ts",
     "check:params": "node scripts/check-params.mjs",
-    "report": "tsx src/bench/report.ts"
+    "report": "tsx src/bench/report.ts",
+    "shot": "node scripts/shot.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.21.0",
@@ -21,6 +22,7 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/three": "0.187.0",
+    "puppeteer-core": "^25.16.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vite": "^6.0.0"

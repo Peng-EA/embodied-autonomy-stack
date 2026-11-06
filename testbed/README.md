@@ -7,7 +7,7 @@ Rapier（碰撞）+ Three.js（渲染）+ uPlot（曲线），控制环 100 Hz �
 
 ```bash
 npm install
-npm run dev            # 实时：切场景 / 基线 / LLM 延迟
+npm run dev            # /index.html 技术台；/console.html 演示台（角色 + 对话 + 认知面板）
 npm run build          # 静态产物（部署到 /testbed/）
 npm test               # 确定性 / 过期策略 / 区间估计
 npm run bench -- --quick

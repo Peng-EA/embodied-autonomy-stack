@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>流明 · 具身认知交互台（演示形态）</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="top">
+        <div class="brand">
+          <span class="logo">◈</span>
+          <div>
+            <h1>HAST-SEC <em>v0.2</em></h1>
+            <p>具身认知交互与决策 · 从目标到行动</p>
+          </div>
+        </div>
+        <nav class="stages" id="stages"></nav>
+        <div class="meta">
+          <span id="clock">--:--:--</span>
+          <button id="btn-pause">暂停</button>
+          <button id="btn-reset">重置</button>
+        </div>
+      </header>
+
+      <main>
+        <section id="stage">
+          <canvas id="scene"></canvas>
+          <div id="bubble" class="bubble hidden"></div>
+          <div id="action" class="action-tag">待机</div>
+          <div class="stage-caption">
+            <span id="chapter">01</span>
+            <div>
+              <b id="chapter-title">全新场景</b>
+              <p id="chapter-sub">从人物细节到自然待机，让表现与交互更真实</p>
+            </div>
+          </div>
+        </section>
+
+        <aside id="side">
+          <div class="cards">
+            <div class="card"><span>待机抖动</span><b id="m-idle">0.518 s</b></div>
+            <div class="card"><span>语义延迟</span><b id="m-sem">13.8 ms</b></div>
+            <div class="card"><span>控制延迟</span><b id="m-ctl">0.000 ms</b></div>
+          </div>
+
+          <div class="gauges">
+            <div class="gauge">
+              <svg viewBox="0 0 72 72"><circle cx="36" cy="36" r="30" class="bg"/><circle id="g1" cx="36" cy="36" r="30" class="fg"/></svg>
+              <div><b id="g1v">92</b><span>认知负载</span></div>
+            </div>
+            <div class="gauge">
+              <svg viewBox="0 0 72 72"><circle cx="36" cy="36" r="30" class="bg"/><circle id="g2" cx="36" cy="36" r="30" class="fg alt"/></svg>
+              <div><b id="g2v">48</b><span>任务进度</span></div>
+            </div>
+          </div>
+
+          <div class="chat">
+            <h2>交互控制</h2>
+            <ul id="log"></ul>
+            <form id="say">
+              <input id="msg" placeholder="输入指令，例：去桌子那边 / 坐下 / 挥挥手" autocomplete="off" />
+              <button>发送</button>
+            </form>
+          </div>
+
+          <div class="strip">
+            <div><span>语义编码</span><div id="c1"></div></div>
+            <div><span>动作解码</span><div id="c2"></div></div>
+            <div><span>接触力</span><div id="c3"></div></div>
+          </div>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="/src/console/main.ts"></script>
+  </body>
+</html>
