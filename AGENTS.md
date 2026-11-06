@@ -83,9 +83,16 @@ python -m sim.main --baseline full --duration 6 --no-render   # 主闭环还能�
 | `sim/vla/**`·`sim/test_vla_l4.py` | `sim/vla/README.md` / `sim/vla/TESTPLAN.md` |
 | `sim/main.py` | `sim/README.md` / `README.md` |
 | `.github/workflows/**` | `CONTRIBUTING.md` / `AGENTS.md` |
-| `site/**` | `docs/**` / `README.md` |
+| `site/**` | `docs/**` / `README.md` / `AGENTS.md`（改同步脚本本身时） |
 
 规则是**"至少一处"**，不是全要：写清楚比写很多重要。
+
+两个例外要说清，免得把逃生口当成走后门：
+
+- `site/scripts/**`（同步脚本本身）不要求改 docs——它由 `docs site` 构建 job 验证（dead link 会直接红）；
+  这种情况下把规则本身写进 `AGENTS.md` 即可。
+- 仓库根上的 `AGENTS.md` / `CHANGELOG.md` / `README.en.md` **不是站点页面**：站内链接必须指回 GitHub，
+  不要指望它们被渲染。
 
 ### 4.4 逃生口（必须留痕）
 

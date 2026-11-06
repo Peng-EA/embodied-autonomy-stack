@@ -98,8 +98,8 @@ const RULES = [
   {
     id: "site",
     paths: [/^site\//],
-    need: ["docs/", "README.md"],
-    why: "站点只是 docs 的渲染产物，正文必须落在 docs/",
+    need: ["docs/", "README.md", "AGENTS.md"],
+    why: "站点只是 docs 的渲染产物，正文必须落在 docs/（改脚本本身可更新 AGENTS.md）",
   },
 ];
 

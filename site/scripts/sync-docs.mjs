@@ -17,6 +17,8 @@ const PUBLIC_ASSETS = path.join(SITE, 'public', 'assets')
 
 const GH = 'https://github.com/Peng-EA/embodied-autonomy-stack'
 const BLOB = `${GH}/blob/main` // 目录用 blob URL 时 GitHub 会自动跳到 tree
+// 仓库根上、但不属于站点页面的文件：站内链接必须指回 GitHub
+const ROOT_REPO_FILES = ['AGENTS.md', 'CHANGELOG.md', 'README.en.md', 'LICENSE']
 
 // docs 文件 → 站点路由（file 相对 docs/，route 相对站点根）
 const PAGES = [
@@ -90,9 +92,14 @@ function rewriteLinks(text, pageFile) {
   })
 
   // 3b) 相对仓库根/其他目录：../xxx.md 或 ../blog/xxx.md
+  //     根级文件（AGENTS.md / CHANGELOG.md / README.en.md）不是站点页面：
+  //     站点只渲染 docs/ 下的正文，这些必须指回 GitHub，否则 VitePress 报 dead link
+  //     （实测 ../AGENTS.md 会被解析成 ./../AGENTS 而 404）。
   out = out.replace(/\]\(\.\.\/([A-Za-z0-9_/-]+\.md)(#[^)\s]*)?\)/g, (m, rel, anchor) => {
     const route = routeFor(rel)
-    return route ? `](/${route}${anchor || ''})` : m
+    if (route) return `](/${route}${anchor || ''})`
+    if (ROOT_REPO_FILES.includes(posix.basename(rel))) return `](${BLOB}/${rel}${anchor || ''})`
+    return m
   })
 
   // 3c) ../docs/xxx.md → /route
