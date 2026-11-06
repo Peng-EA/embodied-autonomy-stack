@@ -96,10 +96,12 @@ const RULES = [
     why: "流程变了，参与指南与 agent 规矩要跟着变",
   },
   {
-    id: "site",
-    paths: [/^site\//],
-    need: ["docs/", "README.md", "AGENTS.md"],
-    why: "站点只是 docs 的渲染产物，正文必须落在 docs/（改脚本本身可更新 AGENTS.md）",
+    // 只覆盖"管线/产物"，不含 site/*.md：手工页面（如 site/replay.md）本身就是正文，
+    // 它是被读的内容而不是 docs 的产物，要求它去改 docs 是规则过宽。
+    id: "site-plumbing",
+    paths: [/^site\/\.vitepress\//, /^site\/scripts\//, /^site\/public\//],
+    need: ["AGENTS.md", "docs/", "README.md"],
+    why: "主题/同步脚本/静态资源属于管线；改了它至少把规则或用法写进 AGENTS.md",
   },
 ];
 

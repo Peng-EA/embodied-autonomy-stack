@@ -83,14 +83,15 @@ python -m sim.main --baseline full --duration 6 --no-render   # 主闭环还能�
 | `sim/vla/**`·`sim/test_vla_l4.py`·`sim/export_replay.py` | `sim/vla/README.md` / `sim/vla/TESTPLAN.md` |
 | `sim/main.py` | `sim/README.md` / `README.md` |
 | `.github/workflows/**` | `CONTRIBUTING.md` / `AGENTS.md` |
-| `site/**` | `docs/**` / `README.md` / `AGENTS.md`（改同步脚本本身时） |
+| `site/.vitepress/**`·`site/scripts/**`·`site/public/**` | `AGENTS.md` / `docs/**` |
 
 规则是**"至少一处"**，不是全要：写清楚比写很多重要。
 
 两个例外要说清，免得把逃生口当成走后门：
 
-- `site/scripts/**`（同步脚本本身）不要求改 docs——它由 `docs site` 构建 job 验证（dead link 会直接红）；
-  这种情况下把规则本身写进 `AGENTS.md` 即可。
+- **`site/*.md` 是正文，不是产物**：`index.md` / `replay.md` 这类手工页面本身就是被读的内容，
+  改它不要求动 `docs/`（它也不是从 docs 同步出来的）；`site/.vitepress/**`、`site/scripts/**`、
+  `site/public/**` 才是管线，改了至少要把用法写进 `AGENTS.md`。
 - 仓库根上的 `AGENTS.md` / `CHANGELOG.md` / `README.en.md` **不是站点页面**：站内链接必须指回 GitHub，
   不要指望它们被渲染。
 
