@@ -51,6 +51,31 @@
 - **阴性结果**：M2 矩阵 13 格全 1/1 —— 延迟轴在本场景没有分辨力，原因与后续做法见
   [`sim/vla/README.md`](sim/vla/README.md) 第六点五节。**不许拿它宣称"延迟无害"。**
 
+## [0.2.0] - 2026-11-06
+
+### Added
+
+- **ETS-Testbed（`testbed/`）**：Rapier + Three.js + uPlot，控制环在 Web Worker 里 100 Hz 固定步长，
+  core 纯逻辑、无 DOM，**同一份代码**既能在浏览器里实时跑，也能在 Node 里以虚拟时间批跑。
+- **headless 批跑**：`npm run bench` → `runs.jsonl / cells.json / summary.md / curve-*.svg / trajectories-*.svg`，
+  比例给 Wilson 95% 区间，均值区间在 n<8 时明确显示"—"。
+- **公平 B0（`b0f`）**：能读电量、自己决定充电、无反射无抢占——不再是"没有需求来源"的稻草人。
+- **过期指令机制**：`gen` + `requested_sim_time` + `age`，策略 `adopt` / `discard`（连续作废后降级）。
+- **确定性断言**：同 seed 两次运行 `stateHash` 相同（`npm test`）。
+- `docs/testbed.md`、[`ADR-0007`](docs/adr/0007-visualization-stack-switch.md)、`evals/v0.2/`（含首次批跑数据）。
+
+### Changed
+
+- 仓库路线图：v0.2 改为"换栈 + 公平基线"，原 v0.2/v0.3 顺延为 v0.3/v0.4。
+- `sim/` 只作为 v0.1 冻结栈保留；两组数字不跨栈比较。
+
+### 实测（n=20 / n=10，2026-11-06）
+
+- **阴性结果**：移动目标场景下，严格 age 丢弃（`full`）在 2 s 延迟时 **0/20**，
+  照旧执行的 `b0f` 为 **20/20**。原因与下一步见 [`evals/v0.2/README.md`](evals/v0.2/README.md)。
+- 静态对照组三条基线 **全部 10/10**（台子不偏袒）。
+- 已知未测到：抢占在 v0.2 场景里一次都没触发（`b2` 与 `full` 数字完全相同）。
+
 ## [0.1.1] - 2026-11-06
 
 ### Fixed

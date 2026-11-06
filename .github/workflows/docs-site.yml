@@ -8,6 +8,7 @@ on:
     paths:
       - "site/**"
       - "docs/**"
+      - "testbed/**"
       - ".github/workflows/docs-site.yml"
   workflow_dispatch:
 
@@ -44,6 +45,17 @@ jobs:
         # 会拦住刚发布的包（本次是 vue@3.5.45 发布 3h）。
         # 这里显式对齐本地的 0——依赖锁定靠 lockfile，不靠时间窗。
         run: pnpm install --frozen-lockfile --config.minimumReleaseAge=0
+
+      - name: Build testbed（实时栈）
+        working-directory: testbed
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: 把 testbed 构建产物放进站点 /testbed/
+        run: |
+          mkdir -p site/public/testbed
+          cp -r testbed/dist/. site/public/testbed/
 
       - name: Build
         working-directory: site

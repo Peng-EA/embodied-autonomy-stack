@@ -36,6 +36,7 @@ python -m sim.main --baseline full --duration 6 --no-render   # 主闭环还能�
 | `sim/env/**`（场景/物理） | `sim/README.md`、`docs/architecture.md` |
 | `sim/vla/**`、`sim/test_vla_l4.py` | `sim/vla/README.md`；CLI 变更还要 `sim/vla/TESTPLAN.md` |
 | `sim/main.py` 的 CLI | `sim/README.md`、根 `README.md` 的快速开始 |
+| `testbed/src/**`、`testbed/package.json` 的 scripts | `docs/testbed.md`、`evals/v0.2/README.md` |
 | `.github/workflows/**` | `CONTRIBUTING.md`（流程真的变了吗） |
 
 ## 3. 文档怎么写（这份仓库的硬约定）
@@ -82,6 +83,7 @@ python -m sim.main --baseline full --duration 6 --no-render   # 主闭环还能�
 | `sim/env/**` | `sim/README.md` / `docs/architecture.md` |
 | `sim/vla/**`·`sim/test_vla_l4.py`·`sim/export_replay.py` | `sim/vla/README.md` / `sim/vla/TESTPLAN.md` |
 | `sim/main.py` | `sim/README.md` / `README.md` |
+| `testbed/src/**`·`testbed/package.json` | `docs/testbed.md` / `evals/v0.2/README.md` |
 | `.github/workflows/**` | `CONTRIBUTING.md` / `AGENTS.md` |
 | `site/.vitepress/**`·`site/scripts/**`·`site/public/**` | `AGENTS.md` / `docs/**` |
 

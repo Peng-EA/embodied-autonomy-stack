@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ETS-Testbed · 具身时间尺度跑分台</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="scene"></canvas>
+      <aside id="hud">
+        <header>
+          <h1>ETS // TESTBED</h1>
+          <p id="subtitle">v0.2 · Rapier + Three.js · 100 Hz 物理，LLM 异步</p>
+        </header>
+        <div class="controls">
+          <label>场景 <select id="scenario"></select></label>
+          <label>基线 <select id="baseline"></select></label>
+          <label>LLM 延迟 <select id="latency"></select></label>
+          <button id="run">开始</button>
+          <button id="reset">重置</button>
+        </div>
+        <div class="readout">
+          <div><span>仿真时间</span><b id="rt">0.00 s</b></div>
+          <div><span>电量</span><b id="rb">28.0 %</b></div>
+          <div><span>最小间隙</span><b id="rc">—</b></div>
+          <div><span>速度</span><b id="rv">0.00</b></div>
+          <div><span>过期丢弃</span><b id="rs">0</b></div>
+          <div><span>降级</span><b id="rd">否</b></div>
+        </div>
+        <div id="chart"></div>
+        <div id="events"><h2>事件流</h2><ul id="eventlist"></ul></div>
+      </aside>
+    </div>
+    <script type="module" src="/src/app/main.ts"></script>
+  </body>
+</html>

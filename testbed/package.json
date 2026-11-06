@@ -1,0 +1,28 @@
+{
+  "name": "ets-testbed",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "description": "ETS-Testbed：可复现的具身时间尺度跑分台（Rapier + Three.js）",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --import tsx --test tests/core.test.ts",
+    "bench": "tsx src/bench/run.ts",
+    "check:params": "node scripts/check-params.mjs",
+    "report": "tsx src/bench/report.ts"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "0.21.0",
+    "three": "0.187.0",
+    "uplot": "1.6.32"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/three": "0.187.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
+}

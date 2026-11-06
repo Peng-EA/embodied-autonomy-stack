@@ -2,12 +2,13 @@
 
 **给 LLM 划边界，给具身智能补上稳态、反射、情感调制、需求生成与执行修正。**
 
-![status: v0.1 design RFC](https://img.shields.io/badge/status-v0.1%20design%20RFC-orange)
+![status: v0.2 testbed](https://img.shields.io/badge/status-v0.2%20testbed-brightgreen)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![sim: mujoco 10s loop](https://img.shields.io/badge/sim-10s%20loop%20runs-brightgreen)](sim/)
 
-> **当前状态**：v0.1 设计草案 / RFC。契约仍是草案，但**仿真最小闭环已经能跑**（`sim/`，10 秒，无 GPU、无 API key）。
-> 本项目是架构实验场，不是已发布框架。
+> **当前状态**：`v0.1.0` 已冻结（MuJoCo 闭环，数据带已知缺陷，见 [`evals/v0.1-frozen/`](evals/v0.1-frozen/README.md)）；
+> `v0.2` 换到 Web 实时栈 [`testbed/`](testbed/)（Rapier + Three.js，100 Hz），跑出第一份带置信区间的延迟扫描数据。
+> 两组数字**不可跨栈比较**。本项目是架构实验场，不是已发布框架。
 
 ![四层神经系统架构](docs/assets/architecture-long.png)
 
@@ -45,12 +46,35 @@ L4 不是 LLM；LLM 是 L4 调用的**外部异步服务**，可插拔、可断�
 | [`docs/`](docs/) | 正文：为什么、架构、契约、评价、安全、路线图、ADR、博客 | [docs/README.md](docs/README.md) |
 | [`contracts/`](contracts/) | 层间信号的 JSON Schema + 样例（机器可校验） | [contracts/README.md](contracts/README.md) |
 | [`evals/`](evals/) | 四条基线配置、指标定义、复现日志格式 | [evals/README.md](evals/README.md) |
-| [`sim/`](sim/) | MuJoCo 阶段 1 最小闭环（L1–L4 跑通 + 抢占 + 降级） | [sim/README.md](sim/README.md) |
+| [`sim/`](sim/) | MuJoCo 阶段 1 最小闭环（v0.1 冻结栈） | [sim/README.md](sim/README.md) |
+| [`testbed/`](testbed/) | **v0.2 实时跑分台**（Rapier + Three.js，headless 可批跑） | [docs/testbed.md](docs/testbed.md) |
 | [`site/`](site/) | 文档站（VitePress，深色 · 等宽 · 架构图） | [site/README.md](site/README.md) |
 | [`.github/`](.github/) | Issue / PR 模板、Pages 部署与检查流水线 | [架构 RFC 模板](.github/ISSUE_TEMPLATE/architecture-rfc.yml) |
 
 **为什么先有 schema 再有代码**：表是给人读的，schema 是给实现和 CI 读的。
 契约先落地，谁实现 L3 都得对齐——这就是架构约束力。
+
+## Testbed：能被人核对的跑分台（v0.2）
+
+`testbed/` 是浏览器里能实时看、命令行里能批跑的第二套栈：Rapier 做碰撞、Three.js 做渲染、
+控制环跑在 Web Worker 的 100 Hz 固定步长里，LLM 是异步外部服务。
+
+```bash
+cd testbed && npm install
+npm run dev      # 实时：切场景 / 基线 / LLM 延迟
+npm run bench    # headless：场景 x 基线 x 延迟 x seed，产出 runs.jsonl + SVG
+npm test         # 同 seed 两次运行必须同 stateHash
+```
+
+![成功率 vs 延迟](evals/v0.2/results/2026-11-06/curve-stage2-moving.svg)
+
+**第一份数据里有一条阴性结果，照实写**：让目标点动起来之后，严格的"过期就丢"（`full`，500 ms）
+在 2 s 延迟下 **0/20**，而直接执行过期计划的 `b0f` 是 **20/20**。
+原因是丢弃会让系统永久降级、降级限速追不上目标——"过期指令必须作废"在这个场景里**不成立**。
+
+静态对照组（S1）三条基线全部 10/10，说明台子本身不偏袒任何一方。
+
+细节、区间、局限与下一步：[evals/v0.2/README.md](evals/v0.2/README.md) · [docs/testbed.md](docs/testbed.md)。
 
 ## 想读哪一块
 
@@ -133,9 +157,10 @@ $EDITOR docs/interfaces.md
 | 版本 | 这一版要证明什么 | 状态 |
 |---|---|---|
 | v0.1 | 这套分层能在仿真里跑通"解决自身需求"的闭环 | 骨架已跑通，契约待定稿 |
-| v0.2 | 需求能**自主**产生，而不是被写死 | 未开始 |
-| v0.3 | 出错能自己修，抢占判定是对的 | 未开始 |
-| v0.4 | 能力随时间增长（SHOULD） | 未开始 |
+| **v0.2** | **换栈 + 公平 B0 + 延迟扫描（含阴性结果）** | **已跑出第一份数据** |
+| v0.3 | 需求能**自主**产生，而不是被写死 | 未开始 |
+| v0.4 | 出错能自己修，抢占判定是对的 | 未开始 |
+| v0.5 | 能力随时间增长（SHOULD） | 未开始 |
 
 详见 [docs/roadmap.md](docs/roadmap.md)。
 

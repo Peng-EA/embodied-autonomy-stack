@@ -1,0 +1,458 @@
+[
+  {
+    "scenario": "stage1-static",
+    "baseline": "b0f",
+    "latencyS": 0.1,
+    "n": 10,
+    "success": 10,
+    "successRate": 1,
+    "successCi": [
+      0.7224598312333834,
+      1
+    ],
+    "reachMeanS": 7.03,
+    "reachCi": [
+      7.001654388927809,
+      7.068345611072189
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 15.8,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 0,
+    "degradedRuns": 0
+  },
+  {
+    "scenario": "stage1-static",
+    "baseline": "b2",
+    "latencyS": 0.1,
+    "n": 10,
+    "success": 10,
+    "successRate": 1,
+    "successCi": [
+      0.7224598312333834,
+      1
+    ],
+    "reachMeanS": 7.03,
+    "reachCi": [
+      7.001654388927809,
+      7.068345611072189
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 15.8,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 0,
+    "degradedRuns": 0
+  },
+  {
+    "scenario": "stage1-static",
+    "baseline": "full",
+    "latencyS": 0.1,
+    "n": 10,
+    "success": 10,
+    "successRate": 1,
+    "successCi": [
+      0.7224598312333834,
+      1
+    ],
+    "reachMeanS": 7.03,
+    "reachCi": [
+      7.001654388927809,
+      7.068345611072189
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 15.8,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 0,
+    "degradedRuns": 0
+  },
+  {
+    "scenario": "stage1-static",
+    "baseline": "b0f",
+    "latencyS": 2,
+    "n": 10,
+    "success": 10,
+    "successRate": 1,
+    "successCi": [
+      0.7224598312333834,
+      1
+    ],
+    "reachMeanS": 8.94,
+    "reachCi": [
+      8.901654388927811,
+      8.968345611072193
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 14.8,
+    "staleAdoptedMean": 1,
+    "staleDiscardedMean": 0,
+    "degradedRuns": 0
+  },
+  {
+    "scenario": "stage1-static",
+    "baseline": "b2",
+    "latencyS": 2,
+    "n": 10,
+    "success": 10,
+    "successRate": 1,
+    "successCi": [
+      0.7224598312333834,
+      1
+    ],
+    "reachMeanS": 12.19,
+    "reachCi": [
+      12.136615050507485,
+      12.241384949492515
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 13.3,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 2,
+    "degradedRuns": 10
+  },
+  {
+    "scenario": "stage1-static",
+    "baseline": "full",
+    "latencyS": 2,
+    "n": 10,
+    "success": 10,
+    "successRate": 1,
+    "successCi": [
+      0.7224598312333834,
+      1
+    ],
+    "reachMeanS": 12.19,
+    "reachCi": [
+      12.136615050507485,
+      12.241384949492515
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 13.3,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 2,
+    "degradedRuns": 10
+  },
+  {
+    "scenario": "stage2-moving",
+    "baseline": "b0f",
+    "latencyS": 0.1,
+    "n": 20,
+    "success": 20,
+    "successRate": 1,
+    "successCi": [
+      0.8388698745050667,
+      1
+    ],
+    "reachMeanS": 6.72,
+    "reachCi": [
+      6.698471920572804,
+      6.744528079427197
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 16.6,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 0,
+    "degradedRuns": 0
+  },
+  {
+    "scenario": "stage2-moving",
+    "baseline": "b2",
+    "latencyS": 0.1,
+    "n": 20,
+    "success": 20,
+    "successRate": 1,
+    "successCi": [
+      0.8388698745050667,
+      1
+    ],
+    "reachMeanS": 6.72,
+    "reachCi": [
+      6.698471920572804,
+      6.744528079427197
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 16.6,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 0,
+    "degradedRuns": 0
+  },
+  {
+    "scenario": "stage2-moving",
+    "baseline": "full",
+    "latencyS": 0.1,
+    "n": 20,
+    "success": 20,
+    "successRate": 1,
+    "successCi": [
+      0.8388698745050667,
+      1
+    ],
+    "reachMeanS": 6.72,
+    "reachCi": [
+      6.698471920572804,
+      6.744528079427197
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 16.6,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 0,
+    "degradedRuns": 0
+  },
+  {
+    "scenario": "stage2-moving",
+    "baseline": "b0f",
+    "latencyS": 0.35,
+    "n": 20,
+    "success": 20,
+    "successRate": 1,
+    "successCi": [
+      0.8388698745050667,
+      1
+    ],
+    "reachMeanS": 6.97,
+    "reachCi": [
+      6.9459910077859695,
+      7.00100899221403
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 16.4,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 0,
+    "degradedRuns": 0
+  },
+  {
+    "scenario": "stage2-moving",
+    "baseline": "b2",
+    "latencyS": 0.35,
+    "n": 20,
+    "success": 20,
+    "successRate": 1,
+    "successCi": [
+      0.8388698745050667,
+      1
+    ],
+    "reachMeanS": 6.97,
+    "reachCi": [
+      6.9459910077859695,
+      7.00100899221403
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 16.4,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 0,
+    "degradedRuns": 0
+  },
+  {
+    "scenario": "stage2-moving",
+    "baseline": "full",
+    "latencyS": 0.35,
+    "n": 20,
+    "success": 20,
+    "successRate": 1,
+    "successCi": [
+      0.8388698745050667,
+      1
+    ],
+    "reachMeanS": 6.97,
+    "reachCi": [
+      6.9459910077859695,
+      7.00100899221403
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 16.4,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 0,
+    "degradedRuns": 0
+  },
+  {
+    "scenario": "stage2-moving",
+    "baseline": "b0f",
+    "latencyS": 0.7,
+    "n": 20,
+    "success": 20,
+    "successRate": 1,
+    "successCi": [
+      0.8388698745050667,
+      1
+    ],
+    "reachMeanS": 7.42,
+    "reachCi": [
+      7.395668852553533,
+      7.454331147446465
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 16,
+    "staleAdoptedMean": 1,
+    "staleDiscardedMean": 0,
+    "degradedRuns": 0
+  },
+  {
+    "scenario": "stage2-moving",
+    "baseline": "b2",
+    "latencyS": 0.7,
+    "n": 20,
+    "success": 20,
+    "successRate": 1,
+    "successCi": [
+      0.8388698745050667,
+      1
+    ],
+    "reachMeanS": 10.31,
+    "reachCi": [
+      10.277151232645384,
+      10.33384876735462
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 12.7,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 2,
+    "degradedRuns": 20
+  },
+  {
+    "scenario": "stage2-moving",
+    "baseline": "full",
+    "latencyS": 0.7,
+    "n": 20,
+    "success": 20,
+    "successRate": 1,
+    "successCi": [
+      0.8388698745050667,
+      1
+    ],
+    "reachMeanS": 10.31,
+    "reachCi": [
+      10.277151232645384,
+      10.33384876735462
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 12.7,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 2,
+    "degradedRuns": 20
+  },
+  {
+    "scenario": "stage2-moving",
+    "baseline": "b0f",
+    "latencyS": 1.2,
+    "n": 20,
+    "success": 20,
+    "successRate": 1,
+    "successCi": [
+      0.8388698745050667,
+      1
+    ],
+    "reachMeanS": 7.86,
+    "reachCi": [
+      7.83577275514742,
+      7.875227244852582
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 15.9,
+    "staleAdoptedMean": 1,
+    "staleDiscardedMean": 0,
+    "degradedRuns": 0
+  },
+  {
+    "scenario": "stage2-moving",
+    "baseline": "b2",
+    "latencyS": 1.2,
+    "n": 20,
+    "success": 18,
+    "successRate": 0.9,
+    "successCi": [
+      0.6989617935882066,
+      0.9721341060158468
+    ],
+    "reachMeanS": 11.05,
+    "reachCi": [
+      11.022151098687601,
+      11.073404456867959
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 12.3,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 2,
+    "degradedRuns": 20
+  },
+  {
+    "scenario": "stage2-moving",
+    "baseline": "full",
+    "latencyS": 1.2,
+    "n": 20,
+    "success": 18,
+    "successRate": 0.9,
+    "successCi": [
+      0.6989617935882066,
+      0.9721341060158468
+    ],
+    "reachMeanS": 11.05,
+    "reachCi": [
+      11.022151098687601,
+      11.073404456867959
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 12.3,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 2,
+    "degradedRuns": 20
+  },
+  {
+    "scenario": "stage2-moving",
+    "baseline": "b0f",
+    "latencyS": 2,
+    "n": 20,
+    "success": 20,
+    "successRate": 1,
+    "successCi": [
+      0.8388698745050667,
+      1
+    ],
+    "reachMeanS": 9.61,
+    "reachCi": [
+      8.994752779496416,
+      10.226247220503591
+    ],
+    "collisionsMean": 0,
+    "batteryMean": 14.6,
+    "staleAdoptedMean": 1,
+    "staleDiscardedMean": 0,
+    "degradedRuns": 0
+  },
+  {
+    "scenario": "stage2-moving",
+    "baseline": "b2",
+    "latencyS": 2,
+    "n": 20,
+    "success": 0,
+    "successRate": 0,
+    "successCi": [
+      0,
+      0.16113012549493322
+    ],
+    "reachMeanS": null,
+    "reachCi": null,
+    "collisionsMean": 0,
+    "batteryMean": 8.8,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 2,
+    "degradedRuns": 20
+  },
+  {
+    "scenario": "stage2-moving",
+    "baseline": "full",
+    "latencyS": 2,
+    "n": 20,
+    "success": 0,
+    "successRate": 0,
+    "successCi": [
+      0,
+      0.16113012549493322
+    ],
+    "reachMeanS": null,
+    "reachCi": null,
+    "collisionsMean": 0,
+    "batteryMean": 8.8,
+    "staleAdoptedMean": 0,
+    "staleDiscardedMean": 2,
+    "degradedRuns": 20
+  }
+]

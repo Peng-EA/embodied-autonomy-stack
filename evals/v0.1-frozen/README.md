@@ -3,7 +3,7 @@
 > 状态：冻结 · 最后更新 2026-11-06 · 对应 tag `v0.1.0`
 
 这一份是 **v0.1 已发表数字的存档**，不是"最新结果"。v0.2 起换成 Web 实时栈
-（`testbed/`，见 [ADR-0007](../docs/adr/0007-visualization-stack-switch.md)），
+（`testbed/`，见 [ADR-0007](../../docs/adr/0007-visualization-stack-switch.md)），
 **两边的数字不可比较**：引擎、机器人模型、场景、日志口径全换了。
 
 存档文件在 `runs/`：四条基线的 JSONL 与 meta（2026-11-06 重跑，数字与 11-05 的首发一致，
@@ -32,7 +32,7 @@ l1.battery = max(30.0, l1.battery - 0.02)
 ```
 
 B0 从 28.0% 起跑，第一步就被抬到 30.0%，此后永远 30.0%。**"B0 会没电"在这套配置里不可能发生**，
-所以"B0 不充电"是代码写出来的，不是测出来的。这也是 [ADR-0003](../docs/adr/0003-baseline-definitions.md)
+所以"B0 不充电"是代码写出来的，不是测出来的。这也是 [ADR-0003](../../docs/adr/0003-baseline-definitions.md)
 里"B0 是稻草人"的具体形态。
 
 ### 缺陷 2 · 日志标签塌缩成 B1 并互相覆盖

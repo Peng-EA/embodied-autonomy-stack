@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="300" viewBox="0 0 760 300" font-family="ui-monospace, monospace">
+<rect width="760" height="300" fill="#0b0f12"/>
+<text x="56" y="20" fill="#e5e7eb" font-size="13">S1 · 静墙 + 充电桩（复刻 v0.1） · 任务成功率 vs 延迟</text>
+<line x1="56" y1="258.0" x2="742" y2="258.0" stroke="#1f2937"/>
+<text x="48" y="262.0" fill="#9ca3af" font-size="10" text-anchor="end">0%</text>
+<line x1="56" y1="201.0" x2="742" y2="201.0" stroke="#1f2937"/>
+<text x="48" y="205.0" fill="#9ca3af" font-size="10" text-anchor="end">25%</text>
+<line x1="56" y1="144.0" x2="742" y2="144.0" stroke="#1f2937"/>
+<text x="48" y="148.0" fill="#9ca3af" font-size="10" text-anchor="end">50%</text>
+<line x1="56" y1="87.0" x2="742" y2="87.0" stroke="#1f2937"/>
+<text x="48" y="91.0" fill="#9ca3af" font-size="10" text-anchor="end">75%</text>
+<line x1="56" y1="30.0" x2="742" y2="30.0" stroke="#1f2937"/>
+<text x="48" y="34.0" fill="#9ca3af" font-size="10" text-anchor="end">100%</text>
+<text x="56.0" y="276" fill="#9ca3af" font-size="10" text-anchor="middle">0.1s</text>
+<text x="742.0" y="276" fill="#9ca3af" font-size="10" text-anchor="middle">2s</text>
+<text x="399" y="294" fill="#6b7280" font-size="10" text-anchor="middle">LLM 延迟（仿真时间）</text>
+<path d="M56.0,30.0 L742.0,30.0" fill="none" stroke="#f87171" stroke-width="2"/>
+<line x1="56.0" y1="93.3" x2="56.0" y2="30.0" stroke="#f87171" stroke-width="1" opacity="0.5"/>
+<circle cx="56.0" cy="30.0" r="3" fill="#f87171"/>
+<line x1="742.0" y1="93.3" x2="742.0" y2="30.0" stroke="#f87171" stroke-width="1" opacity="0.5"/>
+<circle cx="742.0" cy="30.0" r="3" fill="#f87171"/>
+<rect x="56" y="274" width="10" height="3" fill="#f87171"/>
+<text x="70" y="276" fill="#d1d5db" font-size="10">b0f</text>
+<path d="M56.0,30.0 L742.0,30.0" fill="none" stroke="#60a5fa" stroke-width="2"/>
+<line x1="56.0" y1="93.3" x2="56.0" y2="30.0" stroke="#60a5fa" stroke-width="1" opacity="0.5"/>
+<circle cx="56.0" cy="30.0" r="3" fill="#60a5fa"/>
+<line x1="742.0" y1="93.3" x2="742.0" y2="30.0" stroke="#60a5fa" stroke-width="1" opacity="0.5"/>
+<circle cx="742.0" cy="30.0" r="3" fill="#60a5fa"/>
+<rect x="152" y="274" width="10" height="3" fill="#60a5fa"/>
+<text x="166" y="276" fill="#d1d5db" font-size="10">b2</text>
+<path d="M56.0,30.0 L742.0,30.0" fill="none" stroke="#4ade80" stroke-width="2"/>
+<line x1="56.0" y1="93.3" x2="56.0" y2="30.0" stroke="#4ade80" stroke-width="1" opacity="0.5"/>
+<circle cx="56.0" cy="30.0" r="3" fill="#4ade80"/>
+<line x1="742.0" y1="93.3" x2="742.0" y2="30.0" stroke="#4ade80" stroke-width="1" opacity="0.5"/>
+<circle cx="742.0" cy="30.0" r="3" fill="#4ade80"/>
+<rect x="248" y="274" width="10" height="3" fill="#4ade80"/>
+<text x="262" y="276" fill="#d1d5db" font-size="10">full</text>
+</svg>

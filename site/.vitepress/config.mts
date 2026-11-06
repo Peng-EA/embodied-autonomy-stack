@@ -81,6 +81,7 @@ export default defineConfig({
       { text: 'CONTRACTS', link: '/interfaces' },
       { text: 'BASELINES', link: '/evaluation' },
       { text: 'REPLAY', link: '/replay' },
+      { text: 'TESTBED', link: '/testbed' },
       { text: 'ROADMAP', link: '/roadmap' },
       { text: 'DISCUSSIONS', link: `${GH}/discussions` },
     ],
@@ -91,6 +92,7 @@ export default defineConfig({
           { text: '文档索引', link: '/guide' },
           { text: '为什么做这个', link: '/vision' },
           { text: '实验回放（可拖时间轴）', link: '/replay' },
+          { text: '实时跑分台（v0.2）', link: '/testbed' },
         ],
       },
       {

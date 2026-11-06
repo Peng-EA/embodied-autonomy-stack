@@ -12,6 +12,7 @@
 | 知道怎么证明"有效" | [evaluation.md](evaluation.md) |
 | 确认情绪不会影响安全 | [safety.md](safety.md) |
 | 知道下一步做什么、怎么接活 | [roadmap.md](roadmap.md) |
+| 跑 v0.2 的实时栈、看它的边界 | [testbed.md](testbed.md) |
 | 查 L1/L2/抢占/效价这些词 | [glossary.md](glossary.md) |
 | 看某个决策为什么这么定 | [adr/](adr/) |
 | 读长文观点（假说） | [blog/](blog/) |

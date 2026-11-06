@@ -79,6 +79,34 @@ jobs:
           grep -q '"event": "summary"' logs/*.jsonl
           grep -q '"event": "reflex_override"' logs/*.jsonl || echo "本次没有触发反射（合法，只做提示）"
 
+  testbed:
+    name: testbed（确定性 + 快跑）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: testbed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: testbed/package-lock.json
+      - name: 安装
+        run: npm ci --no-audit --no-fund
+      - name: 参数必须与 sim/config.py 对账
+        run: node scripts/check-params.mjs
+      - name: 单测（确定性 / 过期策略 / 区间估计）
+        run: npm test
+      - name: 快跑（2 seeds x 2 延迟 x 2 基线）
+        run: npm run bench -- --quick --out ../.tmp/bench-ci
+      - name: 产物必须齐全
+        run: |
+          test -f ../.tmp/bench-ci/runs.jsonl
+          test -f ../.tmp/bench-ci/summary.md
+          test -f ../.tmp/bench-ci/curve-stage2-moving.svg
+          grep -q "成功率" ../.tmp/bench-ci/summary.md
+
   vla-probe:
     name: vla probe（离线，不需要模型）
     runs-on: ubuntu-latest

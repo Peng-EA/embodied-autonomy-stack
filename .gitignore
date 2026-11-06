@@ -35,6 +35,11 @@ site/public/assets/
 sim/.venv/
 logs/
 
+# v0.2 实时栈（ETS-Testbed）
+testbed/node_modules/
+testbed/dist/
+site/public/testbed/
+
 # CI 校验脚本的依赖
 checks/node_modules/
 

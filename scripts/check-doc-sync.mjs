@@ -90,6 +90,12 @@ const RULES = [
     why: "主入口的 CLI 是别人复现你的唯一路径",
   },
   {
+    id: "testbed",
+    paths: [/^testbed\/src\//, /^testbed\/package\.json$/],
+    need: ["docs/testbed.md", "evals/v0.2/README.md", "AGENTS.md"],
+    why: "新栈的接口、参数口径与第一批数据都写在 docs/testbed.md 与 evals/v0.2 里",
+  },
+  {
     id: "ci",
     paths: [/^\.github\/workflows\//],
     need: ["CONTRIBUTING.md", "AGENTS.md"],
