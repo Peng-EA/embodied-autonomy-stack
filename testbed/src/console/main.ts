@@ -153,6 +153,29 @@ const morphs: { dict: Record<string, number>; infl: number[] }[] = [];
 // 骨骼微动作：MMD 骨骼名是日文，按关键词抓几根做呼吸/环视/抬手
 const boneRig: { b: THREE.Bone; rest: THREE.Quaternion; kind: string }[] = [];
 
+// Mixamo 标准骨名（这套模型是 mixamorig:*），用来做"不掰折关节"的整身动作
+const HUMAN: Record<string, THREE.Bone> = {};
+const HUMAN_KEYS = ['Hips','Spine','Spine1','Spine2','Neck','Head','LeftArm','RightArm','LeftForeArm','RightForeArm','LeftUpLeg','RightUpLeg','LeftLeg','RightLeg','LeftFoot','RightFoot'];
+const restQ = new Map<THREE.Bone, THREE.Quaternion>();
+
+function indexHumanoid(model: any) {
+  model.traverse((o: any) => {
+    if (!o.isBone) return;
+    const n = String(o.name).replace('mixamorig', '').replace(/^:/, '');
+    if (HUMAN_KEYS.includes(n)) HUMAN[n] = o;
+  });
+}
+
+/** 只绕单轴小角度旋转，rest * delta：这是"摆"，不是"拧" */
+function poseBone(name: string, ex: number, ey = 0, ez = 0) {
+  const b = HUMAN[name];
+  if (!b) return;
+  let rest = restQ.get(b);
+  if (!rest) { rest = b.quaternion.clone(); restQ.set(b, rest); }
+  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(ex, ey, ez));
+  b.quaternion.copy(rest).multiply(q);
+}
+
 function installModel(gltf: any, label: string) {
   proxyParts.forEach((o) => char.remove(o));
   const model = gltf.scene;
@@ -177,19 +200,8 @@ function installModel(gltf: any, label: string) {
         morphs.push({ dict: o.morphTargetDictionary, infl: o.morphTargetInfluences });
       }
     }
-    if (o.isBone) {
-      const n = String(o.name);
-      const kind = n.includes('頭') ? 'head'
-        : n.includes('首') ? 'neck'
-        : n.includes('上半身') ? 'spine'
-        : n.includes('右腕') ? 'armR'
-        : n.includes('左腕') ? 'armL'
-        : n.includes('右ひじ') ? 'elbowR'
-        : n.includes('左ひじ') ? 'elbowL'
-        : '';
-      if (kind) boneRig.push({ b: o, rest: o.quaternion.clone(), kind });
-    }
   });
+  indexHumanoid(model);
   char.add(model);
   usingModel = true;
   setAction('待机 · ' + label);
@@ -229,17 +241,24 @@ function installMMD(mesh: any, label: string) {
   setAction('待机 · ' + label);
 }
 
-new MMDLoader().load(
-  'models/silverwolf/silverwolf.pmx',
-  (mesh: any) => installMMD(mesh, '银狼'),
+// 加载顺序：DeepSeek 娘（本地）→ 银狼（本地）→ 小鲸鲸（仓库内 CC BY）→ 占位
+gltfLoader.load(
+  'models/deepseek.glb',
+  (gltf) => installModel(gltf, 'DeepSeek 娘'),
   undefined,
   () => {
-    // 没放银狼（或本地文件缺失）就退回随仓库分发的小鲸鲸
-    gltfLoader.load(
-      'models/whale-child.glb',
-      (gltf) => installModel(gltf, '小鲸鲸'),
+    new MMDLoader().load(
+      'models/silverwolf/silverwolf.pmx',
+      (mesh: any) => installMMD(mesh, '银狼'),
       undefined,
-      (err) => console.warn('模型都没加载成功，继续用占位角色', err),
+      () => {
+        gltfLoader.load(
+          'models/whale-child.glb',
+          (gltf) => installModel(gltf, '小鲸鲸'),
+          undefined,
+          (err) => console.warn('模型都没加载成功，继续用占位角色', err),
+        );
+      },
     );
   },
 );
@@ -250,9 +269,9 @@ let mode: Mode = 'idle';
 let target: THREE.Vector3 | null = null;
 let waveUntil = 0;
 const spots: Record<string, [number, number]> = {
-  桌边: [1.2, -1.6],
-  床边: [-1.6, 1.0],
-  窗边: [-1.1, -2.4],
+  桌边: [1.05, -1.15],
+  床边: [-1.25, 0.95],
+  窗边: [-0.95, -1.95],
   中间: [0, 0.4],
   原地: [0, 0.4],
 };
@@ -418,6 +437,9 @@ $('btn-reset').onclick = () => {
 const clock = new THREE.Clock();
 let elapsed = 0;
 
+const camOffset = new THREE.Vector3(2.3, 1.95, 3.5);
+const camTarget = new THREE.Vector3(0, 1.02, 0.2);
+
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -429,6 +451,32 @@ function animate() {
   if (!usingModel) {
     head.rotation.z = Math.sin(elapsed * 0.9) * 0.03;
     hairCap.rotation.z = head.rotation.z;
+  } else if (Object.keys(HUMAN).length) {
+    // Mixamo 骨架：只做"摆动"（单轴小角度），不给力矩、不做物理驱动
+    const ph = elapsed * 7.6;
+    const walking = mode === 'walk';
+    poseBone('LeftUpLeg', walking ? Math.sin(ph) * 0.55 : 0);
+    poseBone('RightUpLeg', walking ? -Math.sin(ph) * 0.55 : 0);
+    poseBone('LeftLeg', walking ? Math.max(0, -Math.sin(ph)) * 0.75 : 0);
+    poseBone('RightLeg', walking ? Math.max(0, Math.sin(ph)) * 0.75 : 0);
+    poseBone('LeftArm', walking ? -Math.sin(ph) * 0.32 : Math.sin(elapsed * 1.1) * 0.03);
+    if (mode === 'wave') {
+      poseBone('RightArm', 0, 0, -0.95);
+      poseBone('RightForeArm', 0, 0, -0.45 + Math.sin(elapsed * 9) * 0.2);
+    } else {
+      poseBone('RightArm', walking ? Math.sin(ph) * 0.32 : Math.sin(elapsed * 1.1 + 1) * 0.03);
+      poseBone('RightForeArm', 0);
+    }
+    poseBone('Spine', Math.sin(elapsed * 1.25) * 0.018);
+    poseBone('Head', Math.sin(elapsed * 0.8) * 0.03, Math.sin(elapsed * 0.45) * 0.10);
+
+    for (const m of morphs) {
+      const set = (k: string, v: number) => {
+        const i = m.dict[k];
+        if (i !== undefined) m.infl[i] = v;
+      };
+      set('Breath', 0.4 + 0.4 * Math.sin(elapsed * 1.1));
+    }
   } else {
     // 骨骼：呼吸/环视/抬手（MMD 模型有 632 根骨，抓其中几根就够）
     const dq = new THREE.Quaternion();
@@ -516,6 +564,12 @@ function animate() {
     }
   }
 
+  // 相机跟随：角色走到哪，构图不变（否则一走动就出画）
+  camTarget.lerp(new THREE.Vector3(char.position.x, 1.02, char.position.z), 0.06);
+  const want = camTarget.clone().add(camOffset);
+  camera.position.lerp(want, 0.06);
+  camera.lookAt(camTarget);
+
   renderer.render(scene, camera);
 }
 
@@ -535,3 +589,12 @@ setInterval(() => {
 resize();
 animate();
 pushLog('bot', '准备好了。说个地方，我走过去；或者说「挥挥手」。');
+
+// 演示/截图用：?auto=walk 会在模型加载后自己走向桌边
+const auto = new URLSearchParams(location.search).get('auto');
+if (auto) {
+  setTimeout(() => {
+    if (auto === 'walk') go('桌边');
+    else if (auto === 'wave') wave();
+  }, 4000);
+}

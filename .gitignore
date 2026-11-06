@@ -40,8 +40,11 @@ testbed/node_modules/
 testbed/dist/
 site/public/testbed/
 
-# 角色资产：银狼模型许可为「请勿二次配布」，只在本机放，不进仓库
+# 角色资产：本地模型不进仓库
+# - silverwolf：许可写明「请勿二次配布」
+# - deepseek.glb：发布包里没有单独许可文件，按整包"不可商用"处理
 testbed/public/models/silverwolf/
+testbed/public/models/deepseek.glb
 
 # CI 校验脚本的依赖
 checks/node_modules/
