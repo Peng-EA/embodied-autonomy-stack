@@ -133,6 +133,23 @@ def now_ms(t0: float) -> int:
     return int((time.perf_counter() - t0) * 1000)
 
 
+def _open_unique(log_dir: Path, base: str) -> tuple[Path, Path, Any]:
+    """以 x 模式建文件：同名已存在就加后缀，绝不静默覆盖别人那次运行。
+
+    旧实现用 "w" + 固定文件名，导致四条基线写进同一个 *-B1-*.jsonl 互相覆盖
+    （见 evals/v0.1-frozen/README.md 的缺陷 2）。
+    """
+    for n in range(1000):
+        stem = base if n == 0 else f"{base}-{n}"
+        path = log_dir / f"{stem}.jsonl"
+        try:
+            fh = path.open("x", encoding="utf-8")
+        except FileExistsError:
+            continue
+        return path, log_dir / f"{stem}.meta.json", fh
+    raise RuntimeError(f"日志名冲突过多：{base}")
+
+
 class EventLog:
     """JSONL 日志，字段遵循 evals/log-format.md。
 
@@ -143,11 +160,11 @@ class EventLog:
         self.dir = Path(log_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y-%m-%d")
-        ident = meta.get("baseline", "b1").upper()
+        clock = time.strftime("%H%M%S")
+        ident = meta.get("baseline", "unknown").upper()
         scen = meta.get("scenario", "stage1")
-        self.path = self.dir / f"{stamp}-{ident}-{scen}.jsonl"
-        self.meta_path = self.dir / f"{stamp}-{ident}-{scen}.meta.json"
-        self._fh = self.path.open("w", encoding="utf-8")
+        base = f"{stamp}-{ident}-{clock}-{scen}"
+        self.path, self.meta_path, self._fh = _open_unique(self.dir, base)
         self.meta_path.write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
         )

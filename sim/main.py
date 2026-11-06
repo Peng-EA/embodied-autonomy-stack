@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import math
 import subprocess
@@ -57,15 +56,6 @@ def _git_commit() -> str:
         return "unknown"
 
 
-def _baseline_meta(baseline: str) -> dict:
-    name = {"b0": "b0-llm-central", "b0p": "b0p-behavior-tree",
-            "b1": "b1-no-affect", "b2": "b2-no-preemption"}[baseline.lower()]
-    path = REPO / "evals" / "baselines" / f"{name}.yaml"
-    digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else "missing"
-    return {"baseline": baseline, "baseline_file": str(path.relative_to(REPO)).replace("\\", "/"),
-            "baseline_sha256": digest}
-
-
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="EA Stack · 阶段 1 最小闭环")
     ap.add_argument("--baseline", default="full",
@@ -101,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
 
     t0 = time.perf_counter()
     meta = {
+        # 必须有这一键：EventLog 用它给日志命名（缺了会全部退化成 "B1" 并互相覆盖）
+        "baseline": args.baseline,
         "scenario": "stage1-self-needs",
         "platform": "mujoco",
         "code_commit": _git_commit(),

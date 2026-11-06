@@ -64,6 +64,10 @@ sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈�
 `sim` 的开关**从 `evals/baselines/*.yaml` 读**（`sim/baseline.py`），代码里不再另抄一份。
 四条 yaml 基线都是"关掉某机制"的消融版本；本系统自己的配置是不带 yaml 的 `full`：
 
+> **这组数字已冻结**（tag `v0.1.0`，每格 n=1）。B0 的电量在代码里被钉死，
+> 旧日志文件名还会互相覆盖——两条缺陷与复现方法见 [evals/v0.1-frozen/](../evals/v0.1-frozen/README.md)。
+> v0.2 起换 Web 实时栈（[`testbed/`](../testbed/)），**两组数字不可比较**。
+
 | 配置 | 关掉什么 | 10 秒实测 |
 |---|---|---|
 | `full` | 什么都不关 | 30.5%，到桩充电，抢占正确率 1/1 |
@@ -73,6 +77,8 @@ sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈�
 | B0 | L1/L2/L3 | 30.0%，不充电（无需求来源） |
 
 > 早期版本把 B1 当全开，导致标着 B1 的数字其实是 `full`；已在 `docs/adr/0003` 记录并纠正。
+> 2026-11-06 另修一处：日志文件名恒为 `B1` 且以覆盖方式打开（`meta` 缺 `baseline` 键）。
+> 修复后重跑，数字不变、标签正确；档案在 `evals/v0.1-frozen/runs/`。
 
 ## 三个已经做过实测的问题
 
