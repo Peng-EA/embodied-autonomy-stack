@@ -96,6 +96,12 @@ const RULES = [
     why: "新栈的接口、参数口径与第一批数据都写在 docs/testbed.md 与 evals/v0.2 里",
   },
   {
+    id: "server-l4",
+    paths: [/^server\//],
+    need: ["server/README.md", "docs/testbed.md"],
+    why: "L4 的契约与降级行为写在这两份里",
+  },
+  {
     id: "ci",
     paths: [/^\.github\/workflows\//],
     need: ["CONTRIBUTING.md", "AGENTS.md"],

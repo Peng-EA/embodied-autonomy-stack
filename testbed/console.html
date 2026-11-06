@@ -3,16 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>流明 · 具身认知交互台（小鲸鲸）</title>
+    <title>EA Console · L1–L4 具身自主栈</title>
   </head>
   <body>
     <div id="app">
       <header id="top">
         <div class="brand">
-          <span class="logo">◈</span>
+          <span class="logo" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
           <div>
-            <h1>HAST-SEC <em>v0.2</em></h1>
-            <p>具身认知交互与决策 · 从目标到行动</p>
+            <h1>EA // STACK <em>v0.2</em></h1>
+            <p>L1 内感受 · L2 反射 · L3 调制 · L4 规划</p>
           </div>
         </div>
         <nav class="stages" id="stages"></nav>
@@ -31,43 +31,51 @@
           <div class="stage-caption">
             <span id="chapter">01</span>
             <div>
-              <b id="chapter-title">全新场景</b>
-              <p id="chapter-sub">从人物细节到自然待机，让表现与交互更真实</p>
+              <b id="chapter-title">L1 · 内感受</b>
+              <p id="chapter-sub">饿、渴、体力、体温按 100 Hz 积分</p>
             </div>
           </div>
         </section>
 
         <aside id="side">
           <div class="cards">
-            <div class="card"><span>待机抖动</span><b id="m-idle">0.518 s</b></div>
-            <div class="card"><span>语义延迟</span><b id="m-sem">13.8 ms</b></div>
-            <div class="card"><span>控制延迟</span><b id="m-ctl">0.000 ms</b></div>
+            <div class="card"><span>待机漂移</span><b id="m-idle">— mm</b></div>
+            <div class="card"><span>L4 往返</span><b id="m-sem">— ms</b></div>
+            <div class="card"><span>控制周期</span><b id="m-ctl">10.0 ms</b></div>
+          </div>
+
+          <h2 class="panel-title">L1 身体状态 <em id="l1-src">100 Hz</em></h2>
+          <div class="vitals">
+            <div class="vital"><span>饥饿</span><div class="bar"><i id="v-hunger"></i></div><b id="v-hunger-n">0%</b></div>
+            <div class="vital"><span>口渴</span><div class="bar"><i id="v-thirst"></i></div><b id="v-thirst-n">0%</b></div>
+            <div class="vital"><span>体力</span><div class="bar"><i id="v-energy"></i></div><b id="v-energy-n">0%</b></div>
+            <div class="vital"><span>体温</span><div class="bar"><i id="v-temp"></i></div><b id="v-temp-n">36.6°</b></div>
           </div>
 
           <div class="gauges">
             <div class="gauge">
               <svg viewBox="0 0 72 72"><circle cx="36" cy="36" r="30" class="bg"/><circle id="g1" cx="36" cy="36" r="30" class="fg"/></svg>
-              <div><b id="g1v">92</b><span>认知负载</span></div>
+              <div><b id="g1v">0</b><span>需求压力</span></div>
             </div>
             <div class="gauge">
               <svg viewBox="0 0 72 72"><circle cx="36" cy="36" r="30" class="bg"/><circle id="g2" cx="36" cy="36" r="30" class="fg alt"/></svg>
-              <div><b id="g2v">48</b><span>任务进度</span></div>
+              <div><b id="g2v">0</b><span>计划年龄 ms</span></div>
             </div>
           </div>
 
           <div class="chat">
-            <h2>交互控制</h2>
+            <h2>L4 指令 <em id="l4-src">server 未连接</em></h2>
             <ul id="log"></ul>
             <form id="say">
-              <input id="msg" placeholder="输入指令，例：去桌子那边 / 坐下 / 挥挥手" autocomplete="off" />
+              <input id="msg" placeholder="输入指令，例：去桌边 / 坐下 / 挥挥手" autocomplete="off" />
               <button>发送</button>
             </form>
           </div>
 
           <div class="strip">
-            <div><span>语义编码</span><div id="c1"></div></div>
-            <div><span>动作解码</span><div id="c2"></div></div>
-            <div><span>接触力</span><div id="c3"></div></div>
+            <div><span>L1 需求压力</span><div id="c1"></div></div>
+            <div><span>L1 体力</span><div id="c2"></div></div>
+            <div><span>L4 计划年龄</span><div id="c3"></div></div>
           </div>
         </aside>
       </main>

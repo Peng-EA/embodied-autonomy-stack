@@ -5,6 +5,8 @@ import { MMDLoader } from '../vendor/MMDLoader.js';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import './style.css';
+import { Vitals } from './vitals.ts';
+import { Planner, STALE_AGE_MS } from './plan.ts';
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -313,10 +315,10 @@ function setAction(t: string) {
 }
 
 const chapters = [
-  ['01', '全新场景', '从人物细节到自然待机，让表现与交互更真实'],
-  ['02', '语言的边界', '同一句话，在场景里落成不同的动作'],
-  ['03', '从语言到物体交互', '交互对象不必预设，场景可以任意'],
-  ['04', '连续任务', '从理解一句话，到一步步走完一件事'],
+  ['01', 'L1 · 内感受', '饿、渴、体力、体温按 100 Hz 积分'],
+  ['02', 'L2 · 反射', '视线追随、指令打断，< 100 ms'],
+  ['03', 'L3 · 调制', '情绪只改参数，不改安全判定'],
+  ['04', 'L4 · 规划', '异步意图；过期作废或降级'],
 ];
 let chapterIdx = 0;
 function setChapter(i: number) {
@@ -338,7 +340,7 @@ setChapter(0);
 
 // ---------------------------------------------------------------- 对话
 const log = $('log');
-function pushLog(who: 'me' | 'bot', text: string) {
+function pushLog(who: 'me' | 'bot' | 'sys', text: string) {
   const li = document.createElement('li');
   li.className = who;
   li.textContent = text;
@@ -399,25 +401,91 @@ const c1 = mkChart('c1', '#111827');
 const c2 = mkChart('c2', '#7c9cff');
 const c3 = mkChart('c3', '#e08a8a');
 
+const vitals = new Vitals();
+const planner = new Planner((import.meta as any).env?.VITE_PLAN_URL ?? 'http://127.0.0.1:8787');
+
+// 演示种子：?vitals=thirsty 直接把口渴拉到 0.82，省得等 20 秒（仅影响初值）
+if (new URLSearchParams(location.search).get('vitals') === 'thirsty') {
+  vitals.thirst = 0.82;
+  vitals.hunger = 0.35;
+}
+
 let phase = 0;
 function sample() {
-  phase += 0.08;
+  phase += 0.12;
   const push = (c: { u: uPlot; data: number[][] }, v: number) => {
     c.data[0].push(phase);
     c.data[1].push(v);
     if (c.data[0].length > 90) { c.data[0].shift(); c.data[1].shift(); }
     c.u.setData(c.data);
   };
-  push(c1, 0.5 + 0.35 * Math.sin(phase * 1.7) + 0.12 * Math.sin(phase * 5.3));
-  push(c2, 0.4 + 0.3 * Math.sin(phase * 0.9 + 1.2) + (mode === 'walk' ? 0.25 : 0));
-  push(c3, mode === 'sit' ? 0.15 : 0.08 + Math.abs(Math.sin(phase * 2.2)) * 0.1);
+  // 三条曲线都是真值：L1 需求压力、L1 体力、L4 计划年龄
+  push(c1, vitals.pressure());
+  push(c2, vitals.energy);
+  push(c3, Math.min(4000, planner.lastAgeMs));
 
-  const load = Math.min(1, 0.62 + (mode === 'walk' ? 0.3 : 0) + 0.05 * Math.sin(phase));
-  setGauge('g1', load);
-  $('m-idle').textContent = (0.5 + 0.02 * Math.sin(phase)).toFixed(3) + ' s';
-  $('m-sem').textContent = (13.8 + 2 * Math.sin(phase * 0.7)).toFixed(1) + ' ms';
-  $('m-ctl').textContent = (0.000 + (mode === 'walk' ? 0.012 : 0)).toFixed(3) + ' ms';
+  setGauge('g1', vitals.pressure());
+  setGauge('g2', Math.min(1, planner.lastAgeMs / 4000));
+  $('g2v').textContent = String(planner.lastAgeMs);
+
+  $('m-idle').textContent = (Math.abs(char.position.y) * 1000).toFixed(1) + ' mm';
+  $('m-sem').textContent = planner.latencyMs ? planner.latencyMs + ' ms' : '— ms';
+  $('m-ctl').textContent = '10.0 ms';
+
+  setBar('v-hunger', 'v-hunger-n', vitals.hunger, (v) => Math.round(v * 100) + '%');
+  setBar('v-thirst', 'v-thirst-n', vitals.thirst, (v) => Math.round(v * 100) + '%');
+  setBar('v-energy', 'v-energy-n', vitals.energy, (v) => Math.round(v * 100) + '%', true);
+  setBar(
+    'v-temp',
+    'v-temp-n',
+    Math.min(1, Math.max(0, (vitals.temperature - 36) / 2)),
+    () => vitals.temperature.toFixed(1) + '°',
+  );
 }
+
+function setBar(barId: string, numId: string, v: number, fmt: (v: number) => string, invert = false) {
+  const bar = $(barId) as HTMLElement;
+  bar.style.width = Math.round(Math.min(1, Math.max(0, v)) * 100) + '%';
+  const danger = invert ? v < 0.25 : v > 0.8;
+  const warn = invert ? v < 0.45 : v > 0.6;
+  bar.className = danger ? 'bad' : warn ? 'warn' : '';
+  $(numId).textContent = fmt(v);
+}
+
+// L4：需求压力过线才问服务；结果过期就作废重来，不拿旧计划开车。
+let planning = false;
+let lastPlanAt = -99;
+setInterval(async () => {
+  if (paused || planning) return;
+  if (!usingModel) return;
+  if (vitals.pressure() < 0.78) return;
+  if (elapsed - lastPlanAt < 9) return;
+
+  planning = true;
+  lastPlanAt = elapsed;
+  const simMs = Math.round(elapsed * 1000);
+  const out = await planner.request(vitals, simMs);
+  planning = false;
+
+  $('l4-src').textContent = out.provider + ' · ' + out.latencyMs + ' ms';
+
+  if (out.stale) {
+    pushLog('sys', '计划过期 age=' + out.ageMs + 'ms（阈值 ' + STALE_AGE_MS + '）→ 作废，重新规划');
+    setAction('计划过期 · 重新规划');
+    lastPlanAt = elapsed - 5.5;
+    return;
+  }
+  if (out.intent.kind === 'goto' && out.intent.target) {
+    const d = Math.hypot(char.position.x - out.intent.target.x, char.position.z - out.intent.target.z);
+    if (d < 0.4) return; // 已经在该做的事旁边，别原地反复下令
+    target = new THREE.Vector3(out.intent.target.x, 0, out.intent.target.z);
+    mode = 'walk';
+    pushLog('sys', 'L4 采纳 · ' + out.provider + ' · age=' + out.ageMs + 'ms · ' + (out.intent.why || ''));
+    say(out.intent.say || '我过去看看。');
+    setAction('行走 · L4 意图');
+  }
+}, 700);
+
 setInterval(sample, 120);
 
 // ---------------------------------------------------------------- 循环
@@ -432,6 +500,10 @@ $('btn-reset').onclick = () => {
   target = null;
   setAction('待机');
   setChapter(0);
+  vitals.reset();
+  planner.lastAgeMs = 0;
+  planner.latencyMs = 0;
+  $('l4-src').textContent = 'server 未连接';
 };
 
 const clock = new THREE.Clock();
@@ -443,7 +515,17 @@ const camTarget = new THREE.Vector3(0, 1.02, 0.2);
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
-  if (!paused) elapsed += dt;
+  if (!paused) {
+    elapsed += dt;
+    vitals.tick(dt, mode === 'walk', mode === 'sit');
+    // 到达对应地点就开始"解决需求"：渴→水杯，饿→冰箱，累→床
+    const px = char.position.x;
+    const pz = char.position.z;
+    const near = (x: number, z: number, r = 0.75) => Math.hypot(px - x, pz - z) < r;
+    if (near(-1.25, 0.95)) vitals.thirst = Math.max(0, vitals.thirst - 0.25 * dt);
+    if (near(1.05, -1.15)) vitals.hunger = Math.max(0, vitals.hunger - 0.2 * dt);
+    if (near(-0.95, -1.95)) vitals.energy = Math.min(1, vitals.energy + 0.08 * dt);
+  }
 
   // 待机呼吸
   const bob = Math.sin(elapsed * 1.6) * (usingModel ? 0.025 : 0.012);

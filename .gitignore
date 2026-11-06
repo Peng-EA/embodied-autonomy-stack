@@ -46,6 +46,9 @@ site/public/testbed/
 testbed/public/models/silverwolf/
 testbed/public/models/deepseek.glb
 
+# L4 服务的虚拟环境
+server/.venv/
+
 # CI 校验脚本的依赖
 checks/node_modules/
 

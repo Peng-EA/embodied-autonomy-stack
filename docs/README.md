@@ -13,6 +13,7 @@
 | 确认情绪不会影响安全 | [safety.md](safety.md) |
 | 知道下一步做什么、怎么接活 | [roadmap.md](roadmap.md) |
 | 跑 v0.2 的实时栈、看它的边界 | [testbed.md](testbed.md) |
+| 看 L4 服务怎么起、怎么降级 | [../server/README.md](../server/README.md) |
 | 查 L1/L2/抢占/效价这些词 | [glossary.md](glossary.md) |
 | 看某个决策为什么这么定 | [adr/](adr/) |
 | 读长文观点（假说） | [blog/](blog/) |
