@@ -40,6 +40,9 @@ testbed/node_modules/
 testbed/dist/
 site/public/testbed/
 
+# 角色资产：银狼模型许可为「请勿二次配布」，只在本机放，不进仓库
+testbed/public/models/silverwolf/
+
 # CI 校验脚本的依赖
 checks/node_modules/
 

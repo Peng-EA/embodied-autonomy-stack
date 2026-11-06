@@ -14,7 +14,7 @@ page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
 page.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
 await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
 await page.goto(url, { waitUntil: 'networkidle2', timeout: 40000 });
-await new Promise((r) => setTimeout(r, 3000));
+await new Promise((r) => setTimeout(r, Number(process.env.SHOT_WAIT ?? 3000)));
 await page.screenshot({ path: out });
 console.log('screenshot', out);
 console.log('errors', JSON.stringify(errs, null, 1));

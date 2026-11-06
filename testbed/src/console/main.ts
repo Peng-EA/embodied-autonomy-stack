@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { MMDLoader } from '../vendor/MMDLoader.js';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import './style.css';
@@ -149,36 +150,97 @@ const proxyParts = [...char.children];
 let usingModel = false;
 const morphs: { dict: Record<string, number>; infl: number[] }[] = [];
 
-const loader = new GLTFLoader();
-loader.load(
-  'models/whale-child.glb',
-  (gltf) => {
-    proxyParts.forEach((o) => char.remove(o));
-    const model = gltf.scene;
-    const box = new THREE.Box3().setFromObject(model);
-    const h = box.max.y - box.min.y;
-    const s = 1.45 / h; // 缩放到 1.45 m 高（房间里更像"站着的人"）
-    model.scale.setScalar(s);
-    const b2 = new THREE.Box3().setFromObject(model);
-    model.position.y -= b2.min.y;
-    model.traverse((o: any) => {
-      if (o.isMesh) {
-        o.castShadow = true;
-        o.receiveShadow = true;
-        if (o.material) o.material.roughness = Math.min(0.9, o.material.roughness ?? 0.8);
-        // 这套模型没有骨骼，但有形态键（Breath / Head_Turn / Arm_*）——用它们做"活着"的微动作
-        if (o.morphTargetDictionary && o.morphTargetInfluences) {
-          morphs.push({ dict: o.morphTargetDictionary, infl: o.morphTargetInfluences });
+// 骨骼微动作：MMD 骨骼名是日文，按关键词抓几根做呼吸/环视/抬手
+const boneRig: { b: THREE.Bone; rest: THREE.Quaternion; kind: string }[] = [];
+
+function installModel(gltf: any, label: string) {
+  proxyParts.forEach((o) => char.remove(o));
+  const model = gltf.scene;
+  const box = new THREE.Box3().setFromObject(model);
+  const h = box.max.y - box.min.y;
+  const s = 1.55 / h; // 缩放到 1.55 m 高
+  model.scale.setScalar(s);
+  const b2 = new THREE.Box3().setFromObject(model);
+  model.position.y -= b2.min.y;
+  model.traverse((o: any) => {
+    if (o.isMesh) {
+      o.castShadow = true;
+      o.receiveShadow = true;
+      if (o.material) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          if (m.map) m.map.anisotropy = 4;
+          if ('roughness' in m) m.roughness = Math.min(0.9, m.roughness ?? 0.8);
         }
       }
-    });
-    char.add(model);
-    usingModel = true;
-    setAction('待机 · 小鲸鲸');
-  },
+      if (o.morphTargetDictionary && o.morphTargetInfluences) {
+        morphs.push({ dict: o.morphTargetDictionary, infl: o.morphTargetInfluences });
+      }
+    }
+    if (o.isBone) {
+      const n = String(o.name);
+      const kind = n.includes('頭') ? 'head'
+        : n.includes('首') ? 'neck'
+        : n.includes('上半身') ? 'spine'
+        : n.includes('右腕') ? 'armR'
+        : n.includes('左腕') ? 'armL'
+        : n.includes('右ひじ') ? 'elbowR'
+        : n.includes('左ひじ') ? 'elbowL'
+        : '';
+      if (kind) boneRig.push({ b: o, rest: o.quaternion.clone(), kind });
+    }
+  });
+  char.add(model);
+  usingModel = true;
+  setAction('待机 · ' + label);
+}
+
+// 先试 MMD 原生格式（PMX 直接读，蒙皮/材质由 MMDLoader 处理，比转 glTF 稳）
+const gltfLoader = new GLTFLoader();
+
+function installMMD(mesh: any, label: string) {
+  proxyParts.forEach((o) => char.remove(o));
+  // MMD 模型约 20 单位高；用固定比例（按包围盒算会被光翼撑大，人缩成一小坨）
+  mesh.rotation.y = 0; // 这套 MMD 默认朝 +Z（朝镜头）
+  mesh.scale.setScalar(0.078);
+  const b2 = new THREE.Box3().setFromObject(mesh);
+  mesh.position.y -= b2.min.y;
+  mesh.frustumCulled = false;
+  mesh.traverse((o: any) => {
+    if (o.isMesh) {
+      o.castShadow = true;
+      o.receiveShadow = true;
+    }
+  });
+  for (const b of (mesh.skeleton?.bones ?? []) as any[]) {
+    const n = String(b.name);
+    const kind = n.includes('頭') ? 'head'
+      : n === '首' ? 'neck'
+      : n === '上半身' || n === '上半身2' ? 'spine'
+      : n === '右腕' ? 'armR'
+      : n === '左腕' ? 'armL'
+      : n === '右ひじ' ? 'elbowR'
+      : n === '左ひじ' ? 'elbowL'
+      : '';
+    if (kind) boneRig.push({ b, rest: b.quaternion.clone(), kind });
+  }
+  char.add(mesh);
+  usingModel = true;
+  setAction('待机 · ' + label);
+}
+
+new MMDLoader().load(
+  'models/silverwolf/silverwolf.pmx',
+  (mesh: any) => installMMD(mesh, '银狼'),
   undefined,
-  (err) => {
-    console.warn('模型没加载成功，继续用占位角色', err);
+  () => {
+    // 没放银狼（或本地文件缺失）就退回随仓库分发的小鲸鲸
+    gltfLoader.load(
+      'models/whale-child.glb',
+      (gltf) => installModel(gltf, '小鲸鲸'),
+      undefined,
+      (err) => console.warn('模型都没加载成功，继续用占位角色', err),
+    );
   },
 );
 
@@ -368,6 +430,23 @@ function animate() {
     head.rotation.z = Math.sin(elapsed * 0.9) * 0.03;
     hairCap.rotation.z = head.rotation.z;
   } else {
+    // 骨骼：呼吸/环视/抬手（MMD 模型有 632 根骨，抓其中几根就够）
+    const dq = new THREE.Quaternion();
+    const de = new THREE.Euler();
+    for (const r of boneRig) {
+      let ax = 0, ay = 0, az = 0;
+      // MMD 骨骼空间与 three 的欧拉不同，角度给得很小，宁可看不出来也别把人掰折
+      if (r.kind === 'head') { ay = Math.sin(elapsed * 0.45) * 0.10; }
+      else if (r.kind === 'neck') { ay = Math.sin(elapsed * 0.45) * 0.04; }
+      else if (r.kind === 'spine') { ax = Math.sin(elapsed * 1.25) * 0.01; }
+      else if (r.kind === 'armR') { az = mode === 'wave' ? -0.85 + Math.sin(elapsed * 9) * 0.3 : Math.sin(elapsed * 1.2) * 0.02; }
+      else if (r.kind === 'armL') { az = Math.sin(elapsed * 1.2 + 1) * 0.02; }
+      else if (r.kind === 'elbowR') { az = mode === 'wave' ? -0.5 : 0; }
+      de.set(ax, ay, az);
+      dq.setFromEuler(de);
+      r.b.quaternion.copy(r.rest).multiply(dq);
+    }
+
     // 形态键：呼吸常开，头部缓慢环视，挥手时抬右臂
     for (const m of morphs) {
       const set = (k: string, v: number) => {

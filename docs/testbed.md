@@ -31,18 +31,23 @@ npm test           # 确定性 / 过期策略 / 区间估计
 | 部分 | 状态 |
 |---|---|
 | 布局 / 交互 / 指标面板 / 章节字幕 | 已有，可点、可对话、可切章节 |
-| 角色 | **小鲸鲸 · 幼年**（CC BY 4.0，GLB，0 骨骼 / 6 形态键）：呼吸、环视、点头、抬臂；移动时整身"游动"倾斜 |
+| 角色 | **银狼（星穹铁道）**：本地 PMX，632 骨骼 / 81 形态键，用 MMDLoader 直接读；头部/颈部/上半身做微动作。**不随仓库分发**（原许可「请勿二次配布」） |
+| 兜底角色 | 小鲸鲸 · 幼年（CC BY 4.0，GLB，0 骨骼 / 6 形态键）：没放银狼时自动退回 |
 | 房间 | 程序化几何（墙 / 窗 / 床 / 桌 / 架），不是扫描资产 |
 | 指标数值 | **演示数据**，来自合成信号，不是 `src/core/` 的真实遥测 |
 | 与物理栈的接线 | 未接：`console.html` 与 `index.html` 目前是两条互不相干的线 |
 
-模型来源与许可见 `testbed/public/models/ATTRIBUTION.md`。
+模型的分发边界见 `testbed/public/models/README.md`：
 
-**只有幼年形态**：发布包的 README 与 `asset.json` 都写的是「小鲸鲸 · 幼年」（高 1.0 m、0 骨骼），
-zip 内也只含 `whale-child`。成年形态要么另找资产，要么按比例改形（没有骨骼，改形会脱离原设计）。
+- 银狼：**本地私有**，`.gitignore` 排除，克隆者看不到；
+- 小鲸鲸：CC BY 4.0，随仓库分发并署名。
+
+为什么用 MMDLoader 而不是先转 glTF：mmd_tools 导出的 GLB 在这套模型上蒙皮是坏的（顶点被甩成碎片，
+实测两版都炸）；原生 PMX 由 three 的 MMDLoader 解析，骨骼/材质/形态键都正常。three 0.187 已移除
+MMDLoader，所以 `src/vendor/` 里 vendored 了一份（0.160 的版本 + 改了三处 import）。
 
 升级路径：把 `sample()` 的合成信号换成 `src/core` 的 `Sim` 采样；
-换角色只需替换 `src/console/main.ts` 里那一个 `loader.load` 的路径。
+换角色改 `MMDLoader().load(...)` 或 `gltfLoader.load(...)` 的路径即可。
 
 ## 设计（三层，各管一件事）
 
