@@ -42,7 +42,11 @@ export class Planner {
     this.base = base;
   }
 
-  async request(v: Vitals, simMs: number): Promise<PlanOutcome> {
+  async request(
+    v: Vitals,
+    affect: { fear: number; curiosity: number; fatigue: number },
+    simMs: number,
+  ): Promise<PlanOutcome> {
     const gen = ++this.gen;
     const t0 = performance.now();
     let provider = 'server';
@@ -63,6 +67,9 @@ export class Planner {
             thirst: v.thirst,
             energy: v.energy,
             temperature: v.temperature,
+            fear: affect.fear,
+            curiosity: affect.curiosity,
+            fatigue: affect.fatigue,
             pos: { x: 0, z: 0 },
           },
         }),
@@ -78,7 +85,7 @@ export class Planner {
     if (!body) {
       provider = 'local-fallback';
       body = {
-        intent: localRule(v),
+        intent: localRule(v, affect),
         latency_ms: latencyMs,
       };
     }
@@ -99,7 +106,12 @@ export class Planner {
 }
 
 /** 服务端 rule_plan 的同款兜底（必须与服务端保持一致，改一处就要改两处——已知债） */
-function localRule(v: Vitals): Intent {
+function localRule(v: Vitals, affect: { fear: number; curiosity: number; fatigue: number }): Intent {
+  // 情绪进规划：累了先休息；怕了先退到床/角落；好奇值高且没需求时四处看看
+  if (affect.fatigue > 0.75 && v.thirst < 0.85)
+    return { kind: 'goto', target: PLACES.床, say: '我有点累了，去躺一下。', why: 'fatigue>0.75' };
+  if (affect.fear > 0.7 && v.thirst < 0.85)
+    return { kind: 'goto', target: PLACES.床, say: '刚才吓到了，我想退到角落里。', why: 'fear>0.7' };
   if (v.thirst >= 0.85 && v.thirst >= v.hunger)
     return { kind: 'goto', target: PLACES.水杯, say: '我渴了，去喝水。', why: 'thirst>0.85' };
   if (v.hunger >= 0.8)
@@ -108,5 +120,7 @@ function localRule(v: Vitals): Intent {
     return { kind: 'goto', target: PLACES.床, say: '有点撑不住了，去躺一会儿。', why: 'energy<0.2' };
   if (v.thirst >= 0.6)
     return { kind: 'goto', target: PLACES.水杯, say: '去喝口水。', why: 'thirst>0.6' };
+  if (affect.curiosity > 0.7)
+    return { kind: 'goto', target: PLACES.窗边, say: '去窗边看看。', why: 'curiosity>0.7' };
   return { kind: 'idle', say: '', why: '暂无需求' };
 }

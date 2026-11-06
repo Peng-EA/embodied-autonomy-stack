@@ -17,6 +17,9 @@ cases = [
     ({"thirst": 0.9}, "goto"),
     ({"hunger": 0.85}, "goto"),
     ({"energy": 0.1}, "goto"),
+    ({"fatigue": 0.9}, "goto"),   # L3 → L4：累了先去休息
+    ({"fear": 0.9}, "goto"),      # L3 → L4：怕了先退
+    ({"curiosity": 0.9}, "goto"), # 好奇高 → 去窗边
     ({}, "idle"),
 ]
 for state, want in cases:

@@ -8,6 +8,7 @@ import './style.css';
 import { Vitals } from './vitals.ts';
 import { Planner, STALE_AGE_MS } from './plan.ts';
 import { Affect } from './affect.ts';
+import { RoomPhysics } from './physics.ts';
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -146,6 +147,7 @@ for (const s of [-1, 1]) {
 
 char.position.set(0, 0, 0.4);
 char.rotation.y = 0; // 默认面向镜头（+Z）
+let yawOffset = 0; // 模型自身朝向与 +Z 的偏差（装模型时确定）
 scene.add(char);
 
 // 程序化占位：模型加载成功后整组移除（保留作离线兜底）
@@ -205,6 +207,9 @@ function installModel(gltf: any, label: string) {
     }
   });
   indexHumanoid(model);
+  // 探针实测：rot=0 时是正面，180° 才是背面（我先写反了，用 __setYaw 试出来的）
+  yawOffset = 0;
+  char.rotation.y = Math.PI * 0.18; // 略微朝向镜头，避免正侧面
   char.add(model);
   usingModel = true;
   setAction('待机 · ' + label);
@@ -293,6 +298,65 @@ window.addEventListener('pointermove', (e) => {
 });
 
 const reflex = { until: 0, vx: 0, vz: 0, cooldown: 0, count: 0 };
+
+// Rapier：只有一个胶囊 + 静态家具。角色网格只是"跟着胶囊的视觉体"。
+let room: RoomPhysics | null = null;
+RoomPhysics.create().then((r) => {
+  room = r;
+  r.setPos(char.position.x, char.position.z);
+  pushLog('sys', 'Rapier 就绪 · 胶囊 ' + r.constructor.name);
+});
+let blockedFrames = 0;
+let lastActAt = -99;
+
+// ---------------------------------------------------------------- 5 个动作
+type Act = 'none' | 'sit' | 'pick' | 'drink' | 'startle';
+let act: Act = 'none';
+let actUntil = 0;
+
+const ACT_LABEL: Record<Act, string> = {
+  none: '待机',
+  sit: '坐姿',
+  pick: '拿取',
+  drink: '喝水',
+  startle: '被吓',
+};
+
+function play(a: Act, dur = 2.2): void {
+  act = a;
+  actUntil = elapsed + dur;
+  setAction(ACT_LABEL[a]);
+}
+
+/** 动作覆盖层：只摆关节，不给力矩 */
+function applyAction(): void {
+  if (act !== 'none' && elapsed > actUntil) act = 'none';
+  if (act === 'none') return;
+  if (act === 'sit') {
+    char.position.y = -0.3;
+    poseBone('LeftUpLeg', -1.15);
+    poseBone('RightUpLeg', -1.15);
+    poseBone('LeftLeg', 1.25);
+    poseBone('RightLeg', 1.25);
+    poseBone('Spine', 0.06);
+  } else if (act === 'pick') {
+    poseBone('Spine', 0.36);
+    poseBone('Head', 0.22);
+    poseBone('RightArm', -1.1, 0, 0.15);
+    poseBone('RightForeArm', -0.45);
+  } else if (act === 'drink') {
+    poseBone('RightArm', -1.05, 0, 0.25);
+    poseBone('RightForeArm', -1.25, 0, 0.2);
+    poseBone('Head', -0.16);
+    poseBone('Neck', -0.06);
+  } else if (act === 'startle') {
+    const k = Math.max(0, Math.min(1, (actUntil - elapsed) / 0.6));
+    poseBone('Spine', 0.2 * k);
+    poseBone('Head', -0.18 * k);
+    poseBone('LeftArm', -0.5 * k, 0, 0.3 * k);
+    poseBone('RightArm', -0.5 * k, 0, -0.3 * k);
+  }
+}
 
 // ---------------------------------------------------------------- 动作状态机
 type Mode = 'idle' | 'walk' | 'sit' | 'wave';
@@ -390,7 +454,10 @@ function handle(text: string) {
   if (/桌|写|拿/.test(t)) go('桌边');
   else if (/床|躺|睡/.test(t)) go('床边');
   else if (/窗|看/.test(t)) go('窗边');
-  else if (/坐/.test(t)) sit();
+  else if (/坐/.test(t)) { play('sit', 4); }
+  else if (/喝水|喝/.test(t)) { play('drink', 3); }
+  else if (/拿|捡|取/.test(t)) { play('pick', 2.2); }
+  else if (/吓|惊/.test(t)) { play('startle', 1.2); }
   else if (/挥|招|你好|嗨/.test(t)) wave();
   else if (/回来|中间|站/.test(t)) go('中间');
   else say('这句我还接不住，换个说法试试（去桌边 / 坐下 / 挥挥手）。');
@@ -507,7 +574,7 @@ setInterval(async () => {
   planning = true;
   lastPlanAt = elapsed;
   const simMs = Math.round(elapsed * 1000);
-  const out = await planner.request(vitals, simMs);
+  const out = await planner.request(vitals, affect, simMs);
   planning = false;
 
   $('l4-src').textContent = out.provider + ' · ' + out.latencyMs + ' ms';
@@ -553,7 +620,7 @@ $('btn-reset').onclick = () => {
 const clock = new THREE.Clock();
 let elapsed = 0;
 
-const camOffset = new THREE.Vector3(2.3, 1.95, 3.5);
+const camOffset = new THREE.Vector3(2.3, 1.15, 3.5);
 const camTarget = new THREE.Vector3(0, 1.02, 0.2);
 
 function animate() {
@@ -567,9 +634,18 @@ function animate() {
     const px = char.position.x;
     const pz = char.position.z;
     const near = (x: number, z: number, r = 0.75) => Math.hypot(px - x, pz - z) < r;
-    if (near(-1.25, 0.95)) vitals.thirst = Math.max(0, vitals.thirst - 0.25 * dt);
-    if (near(1.05, -1.15)) vitals.hunger = Math.max(0, vitals.hunger - 0.2 * dt);
-    if (near(-0.95, -1.95)) vitals.energy = Math.min(1, vitals.energy + 0.08 * dt);
+    if (near(-1.25, 0.95)) {
+      vitals.thirst = Math.max(0, vitals.thirst - 0.25 * dt);
+      if (act === 'none' && mode !== 'walk' && elapsed - lastActAt > 6) { lastActAt = elapsed; play('drink', 2.4); }
+    }
+    if (near(1.05, -1.15)) {
+      vitals.hunger = Math.max(0, vitals.hunger - 0.2 * dt);
+      if (act === 'none' && mode !== 'walk' && elapsed - lastActAt > 6) { lastActAt = elapsed; play('pick', 2.0); }
+    }
+    if (near(-0.95, -1.95)) {
+      vitals.energy = Math.min(1, vitals.energy + 0.08 * dt);
+      if (act === 'none' && mode !== 'walk' && elapsed - lastActAt > 6) { lastActAt = elapsed; play('sit', 3.5); }
+    }
   }
 
   // 待机呼吸
@@ -599,6 +675,7 @@ function animate() {
     const gain = affect.gazeGain();
     poseBone('Neck', look.pitch * 0.35 * gain, look.yaw * 0.35 * gain);
     poseBone('Head', Math.sin(elapsed * 0.8) * 0.02 + look.pitch * gain, look.yaw * gain);
+    applyAction();
 
     for (const m of morphs) {
       const set = (k: string, v: number) => {
@@ -640,13 +717,13 @@ function animate() {
     }
   }
 
+  // ---------------------------------------------------------------- 运动：速度 → Rapier
+  let vx = 0;
+  let vz = 0;
   if (elapsed < reflex.until) {
-    // L2 后退：直接施加速度，覆盖规划层
-    char.position.x += reflex.vx * dt;
-    char.position.z += reflex.vz * dt;
-  }
-
-  if (mode === 'walk' && target && elapsed >= reflex.until) {
+    vx = reflex.vx;
+    vz = reflex.vz;
+  } else if (mode === 'walk' && target) {
     const dir = target.clone().sub(char.position);
     dir.y = 0;
     const d = dir.length();
@@ -657,26 +734,50 @@ function animate() {
     } else {
       dir.normalize();
       const speed = 1.15 * affect.speedScale();
-      const nx = char.position.x + dir.x * speed * dt;
-      const nz = char.position.z + dir.z * speed * dt;
-      const hit = blockedAt(nx, nz);
-      if (hit && elapsed > reflex.cooldown) {
-        // L2 硬中断：后退，不看情绪（fear 只影响之后的步速）
+      vx = dir.x * speed;
+      vz = dir.z * speed;
+      char.rotation.y = Math.atan2(dir.x, dir.z) + yawOffset;
+    }
+  }
+
+  if (room) {
+    const before = room.pos();
+    room.step(vx, vz);
+    const after = room.pos();
+    char.position.x = after.x;
+    char.position.z = after.z;
+
+    // "撞上了"= 想要的速度没兑现。这是物理给的真信号，不是包围盒猜的。
+    const want = Math.hypot(vx, vz) * dt;
+    const got = Math.hypot(after.x - before.x, after.z - before.z);
+    if (want > 0.002 && got < want * 0.35 && elapsed > reflex.cooldown) {
+      blockedFrames++;
+      if (blockedFrames > 6) {
+        blockedFrames = 0;
         reflex.cooldown = elapsed + 1.2;
         reflex.until = elapsed + 0.45;
-        reflex.vx = -dir.x * 1.1;
-        reflex.vz = -dir.z * 1.1;
+        reflex.vx = -vx * 0.9;
+        reflex.vz = -vz * 0.9;
         reflex.count++;
         target = null;
         mode = 'idle';
         affect.onReflex();
-        pushLog('sys', 'L2 反射 · 遇障后退（' + hit + '）');
+        pushLog('sys', 'L2 反射 · 遇障后退（碰撞）');
         setAction('L2 反射 · 后退');
-        return;
+        play('startle', 1.0);
       }
-      char.position.x = nx;
-      char.position.z = nz;
-      char.rotation.y = Math.atan2(dir.x, dir.z);
+    } else {
+      blockedFrames = 0;
+    }
+  } else {
+    char.position.x += vx * dt;
+    char.position.z += vz * dt;
+  }
+
+  if (mode === 'walk' && target && elapsed >= reflex.until) {
+    const dir2 = target.clone().sub(char.position);
+    dir2.y = 0;
+    if (dir2.length() > 0.08) {
       if (usingModel) {
         // 没绑骨：整身做"游动"式倾斜 + 轻微侧摆
         char.rotation.z = Math.sin(elapsed * 4) * 0.06;
@@ -741,11 +842,26 @@ setInterval(() => {
   $('clock').textContent = d.toTimeString().slice(0, 8);
 }, 1000);
 
+(window as any).__setYaw = (v: number) => { char.rotation.y = v; yawOffset = v; };
+(window as any).__state = () => ({
+  rot: Math.round(char.rotation.y * 100) / 100,
+  mode,
+  hasTarget: !!target,
+  x: Math.round(char.position.x * 100) / 100,
+  z: Math.round(char.position.z * 100) / 100,
+  cam: camera.position.toArray().map((v: number) => Math.round(v * 100) / 100),
+});
+
 resize();
 animate();
 pushLog('bot', '准备好了。说个地方，我走过去；或者说「挥挥手」。');
 
 // 演示/截图用：?auto=walk 会在模型加载后自己走向桌边
+const autoAct = new URLSearchParams(location.search).get('act');
+if (autoAct) {
+  setTimeout(() => play(autoAct as Act, 60), 4000);
+}
+
 const auto = new URLSearchParams(location.search).get('auto');
 if (auto) {
   setTimeout(() => {

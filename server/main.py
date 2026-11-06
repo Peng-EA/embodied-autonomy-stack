@@ -49,6 +49,10 @@ class BodyState(BaseModel):
     energy: float = Field(1, ge=0, le=1)
     temperature: float = 36.6
     battery: float = 100.0
+    # L3 情绪：进规划，但不进步态安全判定
+    fear: float = Field(0, ge=0, le=1)
+    curiosity: float = Field(0.5, ge=0, le=1)
+    fatigue: float = Field(0, ge=0, le=1)
     pos: Vec2 = Vec2(x=0, z=0)
 
 
@@ -88,7 +92,14 @@ PLACES: dict[str, Vec2] = {
 
 
 def rule_plan(state: BodyState) -> Intent:
-    """没有模型时的兜底：按需求强度排序。这不是 LLM，是规则——必须标出来。"""
+    """没有模型时的兜底：按需求强度排序。这不是 LLM，是规则——必须标出来。
+
+    L3 情绪在这里**改选择**（累了先去休息、怕了先退），但不改"什么算危险"。
+    """
+    if state.fatigue >= 0.75 and state.thirst < 0.85:
+        return Intent(kind="goto", target=PLACES["床"], say="我有点累了，去躺一下。", why="fatigue>0.75")
+    if state.fear >= 0.7 and state.thirst < 0.85:
+        return Intent(kind="goto", target=PLACES["床"], say="刚才吓到了，我想退到角落里。", why="fear>0.7")
     if state.thirst >= 0.85 and state.thirst >= state.hunger:
         return Intent(kind="goto", target=PLACES["水杯"], say="我渴了，去喝水。", why="thirst>0.85")
     if state.hunger >= 0.8:
@@ -97,6 +108,8 @@ def rule_plan(state: BodyState) -> Intent:
         return Intent(kind="goto", target=PLACES["床"], say="有点撑不住了，去躺一会儿。", why="energy<0.2")
     if state.thirst >= 0.6:
         return Intent(kind="goto", target=PLACES["水杯"], say="去喝口水。", why="thirst>0.6")
+    if state.curiosity >= 0.7:
+        return Intent(kind="goto", target=PLACES["窗边"], say="去窗边看看。", why="curiosity>0.7")
     return Intent(kind="idle", say="", why="暂无需求")
 
 

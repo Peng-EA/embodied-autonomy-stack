@@ -15,6 +15,12 @@ page.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
 await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
 await page.goto(url, { waitUntil: 'networkidle2', timeout: 40000 });
 await new Promise((r) => setTimeout(r, Number(process.env.SHOT_WAIT ?? 3000)));
+if (process.env.YAW) {
+  await page.evaluate((v) => globalThis.__setYaw?.(Number(v)), process.env.YAW);
+  await new Promise((r) => setTimeout(r, 400));
+}
+const st = await page.evaluate(() => globalThis.__state?.() ?? null);
+console.log('state', JSON.stringify(st));
 await page.screenshot({ path: out });
 console.log('screenshot', out);
 console.log('errors', JSON.stringify(errs, null, 1));
