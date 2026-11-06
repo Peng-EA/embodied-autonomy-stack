@@ -505,7 +505,8 @@ def run_sweep(args, ep_l4: Endpoint, ep_l2: Endpoint) -> list[dict]:
     """M2：延迟 × 量化 的闭环成功率矩阵。每格跑 seeds 次。"""
     import copy
     rows = []
-    lats = [0, 50, 100, 200, 400]
+    # 600 ms 是 MAX_CHUNK_AGE_MS：超过它动作块一定被丢，所以 800/1200 是"必崩"对照组
+    lats = [0, 50, 100, 200, 400, 800, 1200]
     quants = [0.0, 0.25]
     for lat in lats:
         for q in quants:
@@ -533,8 +534,10 @@ def run_sweep(args, ep_l4: Endpoint, ep_l2: Endpoint) -> list[dict]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = build_parser()
-    ap.add_argument("--sweep-seeds", type=int, default=3, help=argparse.SUPPRESS)
-    ap.add_argument("--sweep-duration", type=float, default=10.0, help=argparse.SUPPRESS)
+    ap.add_argument("--sweep-seeds", type=int, default=1, help=argparse.SUPPRESS)
+    # 默认 1 次：场景是确定性的（无随机扰动），跑多次是同一条轨迹复制，别冒充 n
+    ap.add_argument("--sweep-duration", type=float, default=18.0, help=argparse.SUPPRESS)
+    # 18 s 是实测下限：绕墙一圈到桩约 12-14 s，10 s 会让所有格子都记 0 成功（假阴性）
     args = ap.parse_args(argv)
     _init_console()
 
