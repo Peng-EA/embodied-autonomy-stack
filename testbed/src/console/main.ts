@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import './style.css';
@@ -18,8 +20,15 @@ const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 80);
 camera.position.set(2.3, 1.95, 3.5);
 camera.lookAt(0, 1.02, 0.2);
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0xdfe6ee, 1.15));
-const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+// PBR 角色靠环境光照亮：只给方向光会把浅蓝渲染成墨蓝
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.45;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.95;
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0xdcd2c6, 0.5));
+const sun = new THREE.DirectionalLight(0xfff6ea, 1.15);
 sun.position.set(4, 7, 5);
 sun.castShadow = true;
 sun.shadow.mapSize.set(1024, 1024);
@@ -39,8 +48,8 @@ const box = (w: number, h: number, d: number, c: number, x: number, y: number, z
 
 // 房间
 box(8, 0.1, 8, 0xefe0d0, 0, -0.05, 0);          // 地板
-box(8, 3.2, 0.12, 0xf6efe6, 0, 1.6, -4);        // 后墙
-box(0.12, 3.2, 8, 0xf1e7e2, -4, 1.6, 0);        // 左墙
+box(8, 3.2, 0.12, 0xe9dfd3, 0, 1.6, -4);        // 后墙
+box(0.12, 3.2, 8, 0xe4d8d0, -4, 1.6, 0);        // 左墙
 box(1.1, 0.8, 0.05, 0xf3d3d8, 1.9, 1.9, -3.93); // 墙上的画
 box(0.9, 0.06, 0.06, 0xd8c3b2, 1.9, 1.44, -3.9); // 画框底沿
 box(2.0, 0.08, 0.5, 0xe7d6c4, -1.6, 1.5, -3.85); // 搁板
@@ -134,6 +143,44 @@ for (const s of [-1, 1]) {
 char.position.set(0, 0, 0.4);
 char.rotation.y = 0; // 默认面向镜头（+Z）
 scene.add(char);
+
+// 程序化占位：模型加载成功后整组移除（保留作离线兜底）
+const proxyParts = [...char.children];
+let usingModel = false;
+const morphs: { dict: Record<string, number>; infl: number[] }[] = [];
+
+const loader = new GLTFLoader();
+loader.load(
+  'models/whale-child.glb',
+  (gltf) => {
+    proxyParts.forEach((o) => char.remove(o));
+    const model = gltf.scene;
+    const box = new THREE.Box3().setFromObject(model);
+    const h = box.max.y - box.min.y;
+    const s = 1.45 / h; // 缩放到 1.45 m 高（房间里更像"站着的人"）
+    model.scale.setScalar(s);
+    const b2 = new THREE.Box3().setFromObject(model);
+    model.position.y -= b2.min.y;
+    model.traverse((o: any) => {
+      if (o.isMesh) {
+        o.castShadow = true;
+        o.receiveShadow = true;
+        if (o.material) o.material.roughness = Math.min(0.9, o.material.roughness ?? 0.8);
+        // 这套模型没有骨骼，但有形态键（Breath / Head_Turn / Arm_*）——用它们做"活着"的微动作
+        if (o.morphTargetDictionary && o.morphTargetInfluences) {
+          morphs.push({ dict: o.morphTargetDictionary, infl: o.morphTargetInfluences });
+        }
+      }
+    });
+    char.add(model);
+    usingModel = true;
+    setAction('待机 · 小鲸鲸');
+  },
+  undefined,
+  (err) => {
+    console.warn('模型没加载成功，继续用占位角色', err);
+  },
+);
 
 // ---------------------------------------------------------------- 动作状态机
 type Mode = 'idle' | 'walk' | 'sit' | 'wave';
@@ -315,10 +362,26 @@ function animate() {
   if (!paused) elapsed += dt;
 
   // 待机呼吸
-  const bob = Math.sin(elapsed * 1.6) * 0.012;
+  const bob = Math.sin(elapsed * 1.6) * (usingModel ? 0.025 : 0.012);
   char.position.y = bob;
-  head.rotation.z = Math.sin(elapsed * 0.9) * 0.03;
-  hairCap.rotation.z = head.rotation.z;
+  if (!usingModel) {
+    head.rotation.z = Math.sin(elapsed * 0.9) * 0.03;
+    hairCap.rotation.z = head.rotation.z;
+  } else {
+    // 形态键：呼吸常开，头部缓慢环视，挥手时抬右臂
+    for (const m of morphs) {
+      const set = (k: string, v: number) => {
+        const i = m.dict[k];
+        if (i !== undefined) m.infl[i] = v;
+      };
+      set('Breath', 0.45 + 0.45 * Math.sin(elapsed * 1.15));
+      set('Head_Turn', 0.5 + 0.5 * Math.sin(elapsed * 0.42));
+      set('Head_Nod', 0.5 + 0.5 * Math.sin(elapsed * 0.9 + 1.4));
+      const waveAmt = mode === 'wave' ? 0.9 : 0.08 + 0.08 * Math.sin(elapsed * 1.3);
+      set('Arm_R', waveAmt);
+      set('Arm_L', 0.06 + 0.06 * Math.sin(elapsed * 1.3 + 1));
+    }
+  }
 
   if (mode === 'walk' && target) {
     const dir = target.clone().sub(char.position);
@@ -332,29 +395,46 @@ function animate() {
       dir.normalize();
       char.position.addScaledVector(dir, 1.15 * dt);
       char.rotation.y = Math.atan2(dir.x, dir.z);
-      const swing = Math.sin(elapsed * 9) * 0.5;
-      legs[0].rotation.x = swing;
-      legs[1].rotation.x = -swing;
-      arms[0].rotation.x = -swing * 0.6;
-      arms[1].rotation.x = swing * 0.6;
+      if (usingModel) {
+        // 没绑骨：整身做"游动"式倾斜 + 轻微侧摆
+        char.rotation.z = Math.sin(elapsed * 4) * 0.06;
+        char.rotation.x = -0.06;
+      } else {
+        const swing = Math.sin(elapsed * 9) * 0.5;
+        legs[0].rotation.x = swing;
+        legs[1].rotation.x = -swing;
+        arms[0].rotation.x = -swing * 0.6;
+        arms[1].rotation.x = swing * 0.6;
+      }
     }
   } else {
-    legs.forEach((l) => (l.rotation.x *= 0.8));
-    arms.forEach((a) => (a.rotation.x *= 0.8));
+    if (!usingModel) {
+      legs.forEach((l) => (l.rotation.x *= 0.8));
+      arms.forEach((a) => (a.rotation.x *= 0.8));
+    } else {
+      char.rotation.z *= 0.92;
+      char.rotation.x *= 0.92;
+    }
   }
 
   if (mode === 'wave') {
-    arms[1].rotation.z = -1.9 + Math.sin(elapsed * 14) * 0.35;
+    if (!usingModel) {
+      arms[1].rotation.z = -1.9 + Math.sin(elapsed * 14) * 0.35;
+    } else {
+      char.rotation.y += Math.sin(elapsed * 10) * 0.02;
+    }
     if (performance.now() > waveUntil) {
       mode = 'idle';
-      arms[1].rotation.z = -0.12;
+      if (!usingModel) arms[1].rotation.z = -0.12;
       setAction('待机');
     }
   }
   if (mode === 'sit') {
     char.position.y = -0.18;
-    legs[0].rotation.x = -1.3;
-    legs[1].rotation.x = -1.3;
+    if (!usingModel) {
+      legs[0].rotation.x = -1.3;
+      legs[1].rotation.x = -1.3;
+    }
   }
 
   renderer.render(scene, camera);
