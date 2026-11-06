@@ -40,3 +40,6 @@ checks/node_modules/
 
 # 本机临时目录（pip / esbuild 用；本机 Temp 不可用时指向工作区）
 .tmp/
+
+# pip 临时目录（本机 Temp 不可用时会落在仓库根）
+pip-*/

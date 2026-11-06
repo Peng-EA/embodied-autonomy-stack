@@ -23,14 +23,28 @@
 - **补文档与图**：把口头争论过的结论落成文字，本身就是在防止重复争论。
 - **负结果**：复现不出来、实验推翻我们的假设——这类结论同样欢迎，请不要因为"没成功"就不提。
 
+## 文档同步（强制，CI 会拦）
+
+本仓库按 **Docs-as-Code** 管理文档：**改代码的人，在同一个提交里更新对应文档**，
+不允许留到"下一个 PR""以后补"。代码审查即文档审查——缺文档的 PR 不合并。
+
+- 规则与触发矩阵：[AGENTS.md](AGENTS.md) 第 4 节（分级：破坏性 / API 变更 / 新功能 / 重构）
+- 可执行映射：`node scripts/check-doc-sync.mjs --explain`
+- CI：`checks.yml` 的 `doc-sync` job 会 diff 本次推送，命中代码路径但对应文档没在同一次 diff 里 → **红**
+- 确实不需要改文档（纯注释/typo）：提交信息加一行
+  `Docs-Sync: skip —— <具体理由>`，CI 降级为警告并打印理由
+
+版本层面的变更还要在 [CHANGELOG.md](CHANGELOG.md) 留一条（破坏性 / API / 新功能必写）。
+
 ## PR 检查项
 
 提交前请对照 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)：
 
 1. 是否附了复现日志或校验证据
 2. 是否改动了 `contracts/`（改动需先有 ADR）
-3. 是否同步更新了受影响的 `docs/`
+3. 是否在同一提交里更新了受影响的 `docs/`（CI `doc-sync` 会检查）
 4. 是否动到了安全相关内容（见 [SECURITY.md](SECURITY.md)）
+5. 破坏性 / API 变更是否在 [CHANGELOG.md](CHANGELOG.md) 留了条目
 
 ## 文档结构
 
@@ -53,10 +67,15 @@ evals/               基线与指标配置、复现日志格式
 ```text
 <type>: <一句话>
 
-docs:     文档
-contracts: schema / 样例
-evals:     基线 / 指标 / 日志格式
-governance:模板、流程、许可
+feat:       新功能（必须同时更新文档 + CHANGELOG）
+fix:        修 bug
+docs:       只动文档
+contracts:  schema / 样例
+evals:      基线 / 指标 / 日志格式
+sim:        仿真实现
+test:       测试与场景
+ci:         工作流与检查脚本
+governance: 模板、流程、许可
 ```
 
 例：`contracts: add affect_vector schema draft`

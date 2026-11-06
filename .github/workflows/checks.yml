@@ -39,6 +39,27 @@ jobs:
         working-directory: checks
         run: node validate-contracts.mjs
 
+  doc-sync:
+    name: docs sync（代码改了文档必须同改）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # 要能 diff 到任意 base
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # 规则见 AGENTS.md §4.3；脚本 --explain 可打印当前生效的表
+      - name: 同一次推送/PR 里的代码与文档配对
+        env:
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          BASE="${PR_BASE:-$BEFORE}"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then BASE="HEAD~1"; fi
+          echo "base=$BASE head=$(git rev-parse --short HEAD)"
+          node scripts/check-doc-sync.mjs --base "$BASE"
+
   sim:
     name: sim smoke（6 秒闭环）
     runs-on: ubuntu-latest

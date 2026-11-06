@@ -120,6 +120,10 @@ $EDITOR docs/interfaces.md
 细节见 [CONTRIBUTING.md](CONTRIBUTING.md)，行为准则见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)，
 安全问题（含物理安全）见 [SECURITY.md](SECURITY.md)。
 
+**文档同步是强制的**（Docs-as-Code）：改代码要在同一次提交里改对应文档，
+规则与触发矩阵见 [AGENTS.md](AGENTS.md) 第 4 节，CI 的 `doc-sync` job 会拦。
+版本层面的变更有 [CHANGELOG.md](CHANGELOG.md)。
+
 新手任务用 `good-first-architecture` 标签。**负结果同样欢迎**——能用实验推翻上述主张，也是贡献。
 
 ## 路线图
