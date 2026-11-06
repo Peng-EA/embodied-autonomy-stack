@@ -46,6 +46,7 @@ from .vla.fake_ollama import FakeOllama
 from .vla.l4_async import AsyncPlanner, PlanResult
 from .vla.metrics import (Metrics, adoption_snapshot)
 from .vla.ollama_vlm import OllamaActBackend
+from .vla.recorder import SAMPLE_EVERY, Recorder, finite_ok
 from .vla.runner import INFER_HZ, L2Runner
 from .vla import scripted as scripted_mod
 
@@ -178,6 +179,7 @@ def run_episode(args, world, *, ep_l4: Endpoint, ep_l2: Endpoint,
     l1 = Homeostasis(bus, log)
     l2 = ReflexControl(bus, log)
     metrics = Metrics(scene=args.scene, l4_endpoint=ep_l4.base_url)
+    rec = Recorder(enabled=bool(args.record))
 
     fallback = scripted_mod.ScriptedBackend(mode=l2_mode)
     if args.l2 == "ollama-vlm":
@@ -263,6 +265,7 @@ def run_episode(args, world, *, ep_l4: Endpoint, ep_l2: Endpoint,
             dead = f"http://127.0.0.1:{closed_port}"
             planner.ep.base_url = dead
             log.write(t_ms, "SIM", "inject", "fault", detail=f"l4_endpoint_down->{dead}", value=1)
+            rec.event(t_ms, "fault", what="l4_down")
             metrics.fault_at_ms = t_ms
             if not quiet:
                 print(f"  [t={t:.1f}s] 注入故障：L4 端点点到已关闭端口 {dead}")
@@ -273,6 +276,7 @@ def run_episode(args, world, *, ep_l4: Endpoint, ep_l2: Endpoint,
         if l1.broadcasts > prev_broadcasts:
             prev_broadcasts = l1.broadcasts
             cause = l1.cause or "battery_low"
+            rec.event(t_ms, "need", cause=cause, sev=round(l1.severity, 2))
             # 需求出现 → 提交一次 L4；同一原因 1.5 s 内不重复提交
             # 先作废"更早的在途请求"，再提交新的——顺序反了会把刚发的请求当场作废。
             # 另外要满足三个条件才作废：真该重规划的原因、确实有在途请求、去抖窗口外。
@@ -281,6 +285,7 @@ def run_episode(args, world, *, ep_l4: Endpoint, ep_l2: Endpoint,
                 prev_cause = cause
                 last_preempt_t = t
                 planner.preempt(f"L1.{cause}", t_ms)
+                rec.event(t_ms, "preempt", cause=f"L1.{cause}", gen=planner.gen)
             if t - last_submit_t > 1.5:
                 last_submit_t = t
                 ctx = {
@@ -293,6 +298,7 @@ def run_episode(args, world, *, ep_l4: Endpoint, ep_l2: Endpoint,
                                              pos_at_req=world.pos)
                 log.write(t_ms, "L4", "semantic_plan_request", f"g{pending_gen}",
                           need=cause, detail=f"gen={pending_gen} goal={default_goal}")
+                rec.event(t_ms, "plan_request", gen=pending_gen)
 
         # ---- 周期提交（可选）：不给"只在需求出现时才调 L4"留死角，
         #      也让断网/超时能拿到足够样本
@@ -308,6 +314,7 @@ def run_episode(args, world, *, ep_l4: Endpoint, ep_l2: Endpoint,
                                          pos_at_req=world.pos)
             log.write(t_ms, "L4", "semantic_plan_request", f"g{pending_gen}",
                       need="periodic", detail=f"gen={pending_gen} goal={default_goal}")
+            rec.event(t_ms, "plan_request", gen=pending_gen)
 
         # ---- L2 反射（硬否决）
         escape = (-obs.obstacle_dir[0], -obs.obstacle_dir[1])
@@ -317,6 +324,7 @@ def run_episode(args, world, *, ep_l4: Endpoint, ep_l2: Endpoint,
             metrics.reflex_overrides += 1
             log.write(t_ms, "L2", "reflex_override", did,
                       detail=f"clearance={obs.clearance:.2f}", value=1)
+            rec.event(t_ms, "reflex", c=round(obs.clearance, 3))
             # L2 反射默认**不**作废 L4 计划：它否决的是这一秒的动作，不是整条计划。
             # （让反射作废计划会导致"每躲一次墙就把规划扔了"，实测 L4 结果全被作废）
             if args.preempt_by_l2:
@@ -364,12 +372,17 @@ def run_episode(args, world, *, ep_l4: Endpoint, ep_l2: Endpoint,
             cup_force_max = max(cup_force_max, world.cup_force())
         min_clearance = min(min_clearance, obs.clearance)
 
+        if step % SAMPLE_EVERY == 0:
+            rec.frame(t_ms, world, clearance=obs.clearance, battery=l1.battery, mode=l2_mode)
+
         if obs.contact_max > C.CONTACT_EPS:
             metrics.collision_ticks += 1
 
         # ---- L4 结果（非阻塞取回）
         for res in planner.poll():
             metrics.add_result(res)
+            rec.event(t_ms, "plan_result", gen=res.gen, lat=res.latency_ms,
+                      ok=int(res.ok), inv=int(res.invalidated))
             now_cup = world.cup_xy if l2_mode == "manip" else None
             stale_m, stale = adoption_snapshot(
                 res, scene=args.scene, cup_now=now_cup, pos_now=world.pos,
@@ -380,6 +393,7 @@ def run_episode(args, world, *, ep_l4: Endpoint, ep_l2: Endpoint,
                 if stale and args.stale_policy == "discard":
                     log.write(t_ms, "L4", "plan_discarded", f"g{res.gen}",
                               detail=f"stale_m={stale_m:.2f} (discard policy)", value=1)
+                    rec.event(t_ms, "discard", gen=res.gen, stale_m=stale_m)
                 else:
                     obj = res.parsed
                     act = obj.get("action")
@@ -393,6 +407,8 @@ def run_episode(args, world, *, ep_l4: Endpoint, ep_l2: Endpoint,
                               detail=(f"action={act} target=({target[0]:.2f},{target[1]:.2f}) "
                                       f"latency_ms={res.latency_ms} stale={int(stale)} "
                                       f"stale_m={stale_m:.2f}"), value=stale_m)
+                    rec.event(t_ms, "adopt", gen=res.gen, stale=int(stale),
+                              x=round(target[0], 3), y=round(target[1], 3))
             metrics.add_adoption(res, adopted=adopted, stale=stale, stale_m=stale_m)
 
         # ---- 收尾判定
@@ -400,10 +416,12 @@ def run_episode(args, world, *, ep_l4: Endpoint, ep_l2: Endpoint,
             metrics.done = True
             metrics.done_t_ms = t_ms
             log.write(t_ms, "SIM", "goal_reached", "final", value=1)
+            rec.event(t_ms, "goal")
         if args.scene == "manip" and l2_mode == "manip" and world.cup_z > CUP_LIFTED_Z and not metrics.done:
             metrics.done = True
             metrics.done_t_ms = t_ms
             log.write(t_ms, "SIM", "cup_lifted", "final", value=world.cup_z)
+            rec.event(t_ms, "cup_lifted", z=round(world.cup_z, 3))
 
         # ---- 面板 / 实时配速
         if args.trace and step % int(C.CONTROL_HZ / 2) == 0:
@@ -440,7 +458,7 @@ def run_episode(args, world, *, ep_l4: Endpoint, ep_l2: Endpoint,
     log.close()
     metrics.log_path = str(log.path)
     return {"metrics": metrics, "log": log, "world": world, "runner": runner,
-            "planner": planner}
+            "planner": planner, "recorder": rec}
 
 
 # ---------------------------------------------------------------- CLI
@@ -488,6 +506,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--no-warmup", action="store_true")
     ap.add_argument("--log-dir", default="logs/vla")
     ap.add_argument("--report", default=None, help="把指标写成 JSON 到这个路径")
+    ap.add_argument("--record", default=None,
+                    help="把整段运行录成回放带（JSON）到该路径，给站点可视化用")
     ap.add_argument("--sweep", action="store_true",
                     help="跑 M2 矩阵（延迟 × 量化 × seed），用当前场景")
     return ap
@@ -590,6 +610,29 @@ def main(argv: list[str] | None = None) -> int:
         from .vla.metrics import dump_json
         dump_json(metrics, REPO / args.report)
         print(f"指标已写入 {REPO / args.report}")
+
+    if args.record:
+        from .vla.recorder import Recorder as _R
+        rec = out.get("recorder")
+        if rec is None or not rec.frames:
+            print("[record] 没有录到帧，跳过写盘")
+        elif not finite_ok(rec.frames):
+            print("[record] ✗ 帧里有 NaN/Inf，拒绝写盘（坏带子比没带子更坏）")
+        else:
+            meta = {
+                "scenario": args.scene, "provider": args.provider,
+                "l4_model": ep_l4.model, "l4_endpoint": ep_l4.base_url,
+                "l2_backend": args.l2, "duration_s": args.duration,
+                "fault": args.fault, "cut_at": args.cut_at,
+                "l4_period": args.l4_period, "preempt": args.l4_on_preempt,
+                "stale_policy": args.stale_policy,
+                "battery_start": args.battery_start,
+                "commit": _git_commit(),
+                "recorded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "note": "回放是录制件：每帧来自一次真实运行，但不是浏览器里的实时仿真",
+            }
+            path = rec.write(REPO / args.record, meta, metrics.compute())
+            print(f"回放带已写入 {path}（{len(rec.frames)} 帧 / {len(rec.events)} 事件）")
 
     if args.fault == "remote-down" and metrics.fault_at_ms >= 0:
         n_conn = metrics.compute()["M5_transport"]["connection_errors"]

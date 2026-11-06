@@ -18,6 +18,9 @@
 - **动态/操作场景**：`sim/env/scene_dyn.xml`（mocap 干扰体）、`sim/env/scene_manip.xml`
   （2-DOF 臂 + 两指夹爪 + 自由刚体玻璃杯，>5 N 判碎）。
 - **端点配置化 + 预检**：`evals/endpoints.yaml`、`sim/vla/preflight.py`（RTT / 模型存在性 / 修复建议）。
+- **可视化回放**：`sim/export_replay.py` + `--record` 把一次运行录成回放带，
+  站点新增 `/replay`（俯视画面 + 时间轴 + 数据条 + 指标表，全部读同一次运行的 JSON）。
+  四条用例：T1 基线 / T5 抓取 / T6 断网（T3 抢占也可单独重录）。
 - **文档同步检查（Docs-as-Code 执行者）**：`AGENTS.md`（agent 必读规矩与触发矩阵）、
   `scripts/check-doc-sync.mjs`（路径→文档映射，CI 强制）、CI job `doc-sync`。
 - ADR：[0005 `gen` 代际号](docs/adr/0005-plan-generation-token.md)、

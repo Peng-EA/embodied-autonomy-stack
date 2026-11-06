@@ -79,7 +79,7 @@ const RULES = [
   },
   {
     id: "sim-vla",
-    paths: [/^sim\/vla\//, /^sim\/test_vla_l4\.py$/],
+    paths: [/^sim\/vla\//, /^sim\/test_vla_l4\.py$/, /^sim\/export_replay\.py$/],
     need: ["sim/vla/README.md", "sim/vla/TESTPLAN.md"],
     why: "探针的\"真的/代打的\"边界与用例都在这两份里",
   },

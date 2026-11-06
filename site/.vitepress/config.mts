@@ -80,6 +80,7 @@ export default defineConfig({
       { text: 'ARCHITECTURE', link: '/architecture' },
       { text: 'CONTRACTS', link: '/interfaces' },
       { text: 'BASELINES', link: '/evaluation' },
+      { text: 'REPLAY', link: '/replay' },
       { text: 'ROADMAP', link: '/roadmap' },
       { text: 'DISCUSSIONS', link: `${GH}/discussions` },
     ],
@@ -89,6 +90,7 @@ export default defineConfig({
         items: [
           { text: '文档索引', link: '/guide' },
           { text: '为什么做这个', link: '/vision' },
+          { text: '实验回放（可拖时间轴）', link: '/replay' },
         ],
       },
       {

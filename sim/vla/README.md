@@ -134,6 +134,25 @@ python -m sim.test_vla_l4 --provider ollama --scene stage1 --duration 25 \
 结论：**M2 的判据不能靠这张表宣布"延迟无害"**，只能说"本场景测不出来"。
 要压榨这一轴，得换更紧的任务或让"旧指令"的代价显性化（见 TESTPLAN §7 已知局限）。
 
+## 六点八、把运行录成站点回放带
+
+```bash
+python -m sim.export_replay                 # 四个用例全录
+python -m sim.export_replay --only t5-manip # 只录一段
+python -m sim.export_replay --dry           # 只打印命令
+```
+
+- `sim/test_vla_l4.py --record <path>`：每 20 ms 记一帧（位置/速度/间隙/电量/干扰体/
+  杯子受力/末端），并记带时间戳的事件（需求/请求/结果/采纳/丢弃/否决/抢占/故障/完成）；
+- `sim/export_replay.py`：把每个用例的参数**固化在一处**，逐条跑并把带子写进
+  `site/public/replay/*.json`；
+- 站点页 `/replay` 只读产物：画面来自 `frames`，指标表来自 `metrics`，**页面不手写数字**；
+  结论（marks）是人为写的，但每条都能点着跳到那一帧。
+
+录完自检：`NaN/Inf` 一出现就拒绝写盘（坏带子比没带子更坏）；帧数 < 100 也拒绝。
+
+**边界**：回放是录制件，不是浏览器里的实时仿真；拖时间轴不会触发新推理。
+
 ## 七、交给别人跑的测试方案
 
 [TESTPLAN.md](TESTPLAN.md)：八个用例（T1–T8）、通过判据、记录模板、失败处置表、

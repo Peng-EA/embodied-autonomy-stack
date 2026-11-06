@@ -80,7 +80,7 @@ python -m sim.main --baseline full --duration 6 --no-render   # 主闭环还能�
 | `sim/l3_affect/**` | `docs/architecture.md` / `docs/evaluation.md` |
 | `sim/l4_planning/**` | `docs/architecture.md` / `docs/interfaces.md` |
 | `sim/env/**` | `sim/README.md` / `docs/architecture.md` |
-| `sim/vla/**`·`sim/test_vla_l4.py` | `sim/vla/README.md` / `sim/vla/TESTPLAN.md` |
+| `sim/vla/**`·`sim/test_vla_l4.py`·`sim/export_replay.py` | `sim/vla/README.md` / `sim/vla/TESTPLAN.md` |
 | `sim/main.py` | `sim/README.md` / `README.md` |
 | `.github/workflows/**` | `CONTRIBUTING.md` / `AGENTS.md` |
 | `site/**` | `docs/**` / `README.md` / `AGENTS.md`（改同步脚本本身时） |

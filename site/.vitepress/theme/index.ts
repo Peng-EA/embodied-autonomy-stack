@@ -6,6 +6,7 @@ import Mermaid from './components/Mermaid.vue'
 import StackDiagram from './components/StackDiagram.vue'
 import ArchitectureDiagram from './components/ArchitectureDiagram.vue'
 import BaselineMatrix from './components/BaselineMatrix.vue'
+import SimReplay from './components/SimReplay.vue'
 
 export default {
   extends: DefaultTheme,
@@ -15,5 +16,6 @@ export default {
     app.component('StackDiagram', StackDiagram)
     app.component('ArchitectureDiagram', ArchitectureDiagram)
     app.component('BaselineMatrix', BaselineMatrix)
+    app.component('SimReplay', SimReplay)
   },
 }
