@@ -30,7 +30,8 @@ L4 用真模型（`qwen2.5:7b`，Ollama），L2 走规则代理。这一段要�
   { t: 7040, label: 'L4 请求 g1 发出（此时机器人在 y≈-1.6）', tone: 'info' },
   { t: 7090, label: 'L1 广播 battery_low → 抢占，g1 立刻作废', tone: 'bad' },
   { t: 8990, label: 'g1 迟到 686 ms 到达，已被作废（inv=1）', tone: 'bad' },
-  { t: 10120, label: 'g2 被采纳，但目标点已是 1 s 前的世界（stale=1）', tone: 'warn' }
+  { t: 10120, label: 'g2 被采纳，但目标点已是 1 s 前的世界（stale=1）', tone: 'warn' },
+  { t: 24000, label: '25 s 结束：仍在起点片区打转，始终没走到充电桩', tone: 'bad' }
 ]" />
 </ClientOnly>
 
@@ -42,6 +43,7 @@ L4 用真模型（`qwen2.5:7b`，Ollama），L2 走规则代理。这一段要�
 | 被抢占的请求，结果回来时已经被判死 | 7.09 s 发生 `preempt`，8.99 s 返回的 `plan_result` 带 `inv=1` |
 | 没被抢占的结果，也可能基于过期状态 | 10.12 s 采纳的 g2 带 `stale=1`（拒绝它的策略在 `--stale-policy discard`） |
 | 物理没被拖住 | `M6_physics.step_gap_p99` ≈ 10.3 ms，`deadline_miss` = 0 |
+| **任务没完成，而且看得出为什么** | 十次采纳的目标点都在起点附近（`adopt` 事件的 `x/y`），机器人被按在原地打转——L4 的规划**语义上说得通、任务目标丢了**。这不是渲染问题，是这一段最该被看到的结果 |
 
 ---
 
