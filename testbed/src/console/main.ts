@@ -7,6 +7,7 @@ import 'uplot/dist/uPlot.min.css';
 import './style.css';
 import { Vitals } from './vitals.ts';
 import { Planner, STALE_AGE_MS } from './plan.ts';
+import { Affect } from './affect.ts';
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -265,6 +266,34 @@ gltfLoader.load(
   },
 );
 
+// ---------------------------------------------------------------- L2：障碍与视线
+const OBSTACLES = [
+  { cx: 0.45, cz: -0.25, hx: 0.34, hz: 0.26, name: '矮桌' },
+  { cx: -0.45, cz: 0.62, hx: 0.18, hz: 0.18, name: '边几' },
+];
+for (const o of OBSTACLES) {
+  box(o.hx * 2, 0.32, o.hz * 2, 0xe7dccd, o.cx, 0.16, o.cz);
+}
+
+function blockedAt(x: number, z: number): string | null {
+  const r = 0.26; // 角色半径
+  for (const o of OBSTACLES) {
+    if (Math.abs(x - o.cx) < o.hx + r && Math.abs(z - o.cz) < o.hz + r) return o.name;
+  }
+  return null;
+}
+
+// 视线：指针位置 → 头部偏航/俯仰（L2 的"追随"，<100 ms 级别）
+const look = { yaw: 0, pitch: 0 };
+window.addEventListener('pointermove', (e) => {
+  const nx = (e.clientX / window.innerWidth) * 2 - 1;
+  const ny = (e.clientY / window.innerHeight) * 2 - 1;
+  look.yaw = -nx * 0.55;
+  look.pitch = -ny * 0.28;
+});
+
+const reflex = { until: 0, vx: 0, vz: 0, cooldown: 0, count: 0 };
+
 // ---------------------------------------------------------------- 动作状态机
 type Mode = 'idle' | 'walk' | 'sit' | 'wave';
 let mode: Mode = 'idle';
@@ -350,6 +379,13 @@ function pushLog(who: 'me' | 'bot' | 'sys', text: string) {
 
 function handle(text: string) {
   pushLog('me', text);
+  // L2：用户指令优先——正在走的计划立刻作废
+  if (mode === 'walk' || target) {
+    target = null;
+    pushLog('sys', 'L2 打断 · 用户指令优先');
+    lastPlanAt = elapsed;
+  }
+  affect.onCommand();
   const t = text.trim();
   if (/桌|写|拿/.test(t)) go('桌边');
   else if (/床|躺|睡/.test(t)) go('床边');
@@ -402,6 +438,7 @@ const c2 = mkChart('c2', '#7c9cff');
 const c3 = mkChart('c3', '#e08a8a');
 
 const vitals = new Vitals();
+const affect = new Affect();
 const planner = new Planner((import.meta as any).env?.VITE_PLAN_URL ?? 'http://127.0.0.1:8787');
 
 // 演示种子：?vitals=thirsty 直接把口渴拉到 0.82，省得等 20 秒（仅影响初值）
@@ -421,7 +458,7 @@ function sample() {
   };
   // 三条曲线都是真值：L1 需求压力、L1 体力、L4 计划年龄
   push(c1, vitals.pressure());
-  push(c2, vitals.energy);
+  push(c2, affect.fear);
   push(c3, Math.min(4000, planner.lastAgeMs));
 
   setGauge('g1', vitals.pressure());
@@ -441,6 +478,12 @@ function sample() {
     Math.min(1, Math.max(0, (vitals.temperature - 36) / 2)),
     () => vitals.temperature.toFixed(1) + '°',
   );
+
+  const pct = (v: number) => Math.round(v * 100) + '%';
+  setBar('a-fear', 'a-fear-n', affect.fear, pct);
+  setBar('a-curiosity', 'a-curiosity-n', affect.curiosity, pct, true);
+  setBar('a-fatigue', 'a-fatigue-n', affect.fatigue, pct);
+  setBar('a-comfort', 'a-comfort-n', affect.comfort(vitals.pressure()), pct, true);
 }
 
 function setBar(barId: string, numId: string, v: number, fmt: (v: number) => string, invert = false) {
@@ -501,6 +544,7 @@ $('btn-reset').onclick = () => {
   setAction('待机');
   setChapter(0);
   vitals.reset();
+  affect.reset();
   planner.lastAgeMs = 0;
   planner.latencyMs = 0;
   $('l4-src').textContent = 'server 未连接';
@@ -518,6 +562,7 @@ function animate() {
   if (!paused) {
     elapsed += dt;
     vitals.tick(dt, mode === 'walk', mode === 'sit');
+    affect.tick(dt, mode === 'walk');
     // 到达对应地点就开始"解决需求"：渴→水杯，饿→冰箱，累→床
     const px = char.position.x;
     const pz = char.position.z;
@@ -550,7 +595,10 @@ function animate() {
       poseBone('RightForeArm', 0);
     }
     poseBone('Spine', Math.sin(elapsed * 1.25) * 0.018);
-    poseBone('Head', Math.sin(elapsed * 0.8) * 0.03, Math.sin(elapsed * 0.45) * 0.10);
+    // 视线：指针 → 头/颈；强度由 L3 的好奇/恐惧调制
+    const gain = affect.gazeGain();
+    poseBone('Neck', look.pitch * 0.35 * gain, look.yaw * 0.35 * gain);
+    poseBone('Head', Math.sin(elapsed * 0.8) * 0.02 + look.pitch * gain, look.yaw * gain);
 
     for (const m of morphs) {
       const set = (k: string, v: number) => {
@@ -592,7 +640,13 @@ function animate() {
     }
   }
 
-  if (mode === 'walk' && target) {
+  if (elapsed < reflex.until) {
+    // L2 后退：直接施加速度，覆盖规划层
+    char.position.x += reflex.vx * dt;
+    char.position.z += reflex.vz * dt;
+  }
+
+  if (mode === 'walk' && target && elapsed >= reflex.until) {
     const dir = target.clone().sub(char.position);
     dir.y = 0;
     const d = dir.length();
@@ -602,7 +656,26 @@ function animate() {
       setAction('待机');
     } else {
       dir.normalize();
-      char.position.addScaledVector(dir, 1.15 * dt);
+      const speed = 1.15 * affect.speedScale();
+      const nx = char.position.x + dir.x * speed * dt;
+      const nz = char.position.z + dir.z * speed * dt;
+      const hit = blockedAt(nx, nz);
+      if (hit && elapsed > reflex.cooldown) {
+        // L2 硬中断：后退，不看情绪（fear 只影响之后的步速）
+        reflex.cooldown = elapsed + 1.2;
+        reflex.until = elapsed + 0.45;
+        reflex.vx = -dir.x * 1.1;
+        reflex.vz = -dir.z * 1.1;
+        reflex.count++;
+        target = null;
+        mode = 'idle';
+        affect.onReflex();
+        pushLog('sys', 'L2 反射 · 遇障后退（' + hit + '）');
+        setAction('L2 反射 · 后退');
+        return;
+      }
+      char.position.x = nx;
+      char.position.z = nz;
       char.rotation.y = Math.atan2(dir.x, dir.z);
       if (usingModel) {
         // 没绑骨：整身做"游动"式倾斜 + 轻微侧摆
