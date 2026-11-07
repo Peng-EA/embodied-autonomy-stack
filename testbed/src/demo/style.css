@@ -79,6 +79,61 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 400px; min-height: 0
 .stage-note.err { color: #f0c0c0; border-color: #4c2c2f; }
 .stage-note.hide { display: none; }
 
+/* ---------------------------------------------------------------- 舞台右上角：摄像机锁
+   两态：data-state="locked"（默认，锁图标）/ "free"（开锁图标 + 强调色）。
+   底色/描边/圆角跟 .stage-note、.stage-legend 同一套，不加第三种灰。 */
+.stage-btn {
+  position: absolute; right: 16px; top: 16px; z-index: 4;
+  width: 32px; height: 32px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 8px; border: 1px solid var(--line);
+  background: #0d131ab8; color: var(--ink-2);
+  cursor: pointer;
+  /* 按钮的 UA 样式是 overflow:hidden，会把往左弹的 hover 提示裁掉 —— 必须显式放开 */
+  overflow: visible;
+  transition: color 120ms, border-color 120ms, background-color 120ms;
+}
+.stage-btn:hover, .stage-btn:focus-visible {
+  color: var(--ink); border-color: var(--line-2); background: #111a23e6; outline: none;
+}
+/* 自由态用强调色：一眼看出"现在能自己动" */
+.stage-btn[data-state="free"] { color: #cfe0ff; border-color: #3f5b9e; background: var(--accent-bg); }
+.stage-btn[data-state="free"]:hover { color: #e6edf3; border-color: #4d6bb4; }
+.stage-btn .ico {
+  width: 16px; height: 16px; display: none;
+  fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round;
+}
+.stage-btn[data-state="locked"] .ico-lock { display: block; }
+.stage-btn[data-state="free"] .ico-unlock { display: block; }
+
+/* hover 提示：往左弹（按钮贴着舞台右缘，往下弹会压到机器人） */
+.stage-btn::after {
+  content: attr(data-tip);
+  position: absolute; right: calc(100% + 10px); top: 50%;
+  transform: translateY(-50%) translateX(4px);
+  width: max-content; height: auto;
+  padding: 6px 10px; border-radius: 8px;
+  background: #10161df2; border: 1px solid var(--line-2);
+  color: var(--ink-2); font-size: 11px; line-height: 1.2; letter-spacing: .01em;
+  white-space: nowrap; pointer-events: none; opacity: 0;
+  transition: opacity 120ms, transform 120ms;
+}
+.stage-btn:hover::after, .stage-btn:focus-visible::after { opacity: 1; transform: translateY(-50%); }
+
+/* 解锁态操作提示：舞台左下角、图例上方一行小字；锁定态整块隐藏（display，不是 opacity） */
+.cam-hint {
+  position: absolute; left: 20px; bottom: 56px; z-index: 3;
+  display: none; align-items: center; gap: 8px;
+  padding: 6px 12px; border-radius: 8px;
+  background: #0d131ab8; border: 1px solid var(--line);
+  color: var(--ink-2); font-size: 10px; letter-spacing: .06em; white-space: nowrap;
+}
+.cam-hint.on { display: inline-flex; }
+.cam-hint::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 3px #7c9cff26;
+}
+
 .stage-legend {
   position: absolute; left: 20px; bottom: 18px;
   display: flex; align-items: center; gap: 14px;

@@ -3,6 +3,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { G1View } from '../console/g1-view.ts';
 import type { MjPose } from '../console/g1-mesh.ts';
 import type { RayHit, RoomBox } from './clearance.ts';
+import { DemoCameraRig, type CameraState } from './camera.ts';
 
 // 演示台的 3D 部分：只做「摆场景 + 每帧同步」。
 //
@@ -46,6 +47,9 @@ export class DemoStage {
   private readonly focusPoint = new THREE.Vector3(0, 0.9, 0);
   private readonly camOffset = new THREE.Vector3(2.15, 1.5, 3.1);
 
+  /** 摄像机两态（锁定 = 跟随默认机位 / 解锁 = 自由移动）。逻辑在 camera.ts，这里只做接线 */
+  readonly cameraRig: DemoCameraRig;
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -61,6 +65,14 @@ export class DemoStage {
     this.camera = new THREE.PerspectiveCamera(36, 1, 0.05, 60);
     this.camera.position.copy(this.focusPoint).add(this.camOffset);
     this.camera.lookAt(this.focusPoint);
+
+    // 摄像机两态：默认锁定（就是上面这个默认机位），点舞台右上角的图标切到自由态
+    this.cameraRig = new DemoCameraRig({
+      camera: this.camera,
+      canvas,
+      focus: this.focusPoint,
+      defaultOffset: this.camOffset,
+    });
 
     // PBR 需要有环境光才不是死黑：RoomEnvironment 只当光源用，强度压到 0.35
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -171,11 +183,16 @@ export class DemoStage {
     return this.view !== null;
   }
 
+  /** 跟随点的时间常数（s）：60 fps 下每帧 ≈0.12，与旧行为同手感；掉帧时按墙钟收敛，不会"慢放" */
+  private static readonly FOLLOW_TAU = 0.13;
+
   /** 每帧：把最近一帧服务端位姿灌进 G1View（pose 为 null 时保持上一帧，不编数据） */
-  syncPose(pose: MjPose | null, x: number, z: number): void {
+  syncPose(pose: MjPose | null, x: number, z: number, dt = 0.016): void {
     if (this.view && pose) this.view.sync(pose);
-    this.focusPoint.x += (x - this.focusPoint.x) * 0.12;
-    this.focusPoint.z += (z - this.focusPoint.z) * 0.12;
+    // 跟随机位用墙钟 dt（不是夹到 50 ms 的物理 dt）：低帧率下镜头跟随不该被拖成慢动作
+    const k = 1 - Math.exp(-Math.max(0, dt) / DemoStage.FOLLOW_TAU);
+    this.focusPoint.x += (x - this.focusPoint.x) * k;
+    this.focusPoint.z += (z - this.focusPoint.z) * k;
   }
 
   setRaysVisible(on: boolean): void {
@@ -249,17 +266,20 @@ export class DemoStage {
     this.camera.updateProjectionMatrix();
   }
 
-  render(): void {
-    // 相机跟随：目标点已经在 syncPose 里平滑过，这里只做构图
-    const want = this.focusPoint.clone().add(this.camOffset);
-    this.camera.position.lerp(want, 0.08);
-    this.camera.lookAt(this.focusPoint);
+  render(dt = 0.016): void {
+    // 摄像机位姿完全交给 cameraRig（锁定 = 跟随默认机位 / 解锁 = 自由移动）。
+    // 跟随点已经在 syncPose 里平滑过，这里不再叠一层 lerp，免得两套平滑互相打架。
+    this.cameraRig.update(dt);
     this.renderer.render(this.scene, this.camera);
   }
 
-  /** 关键帧/调试用：立刻把相机挪到位（截图等不了 lerp） */
+  /** 关键帧/调试用：立刻把相机挪回默认机位（截图等不了过渡） */
   snapCamera(): void {
-    this.camera.position.copy(this.focusPoint).add(this.camOffset);
-    this.camera.lookAt(this.focusPoint);
+    this.cameraRig.snapDefault();
+  }
+
+  /** 摄像机只读快照（__demo.camera 探针 / demo-check --camera 用） */
+  cameraState(): CameraState {
+    return this.cameraRig.state();
   }
 }

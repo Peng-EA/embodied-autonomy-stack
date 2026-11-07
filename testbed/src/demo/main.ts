@@ -434,7 +434,7 @@ function autopilot(st: BodyState): { vx: number; vz: number; yawRate: number } {
   return { vx: 0.22, vz: 0, yawRate: 0.18 * Math.sin(elapsed * 0.55) };
 }
 
-function step(dt: number): void {
+function step(dt: number, camDt = dt): void {
   if (!body) return;
   let st: BodyState;
   try {
@@ -484,7 +484,7 @@ function step(dt: number): void {
   const cmd = gate.command(wx, wz);
   const out = body.step(dt, cmd);
 
-  stage.syncPose(body.pose(), out.x, out.z);
+  stage.syncPose(body.pose(), out.x, out.z, camDt);
   telemetry.tick(dt, out.speed, prevCmdMag);
 
   // 帧龄：body.stats().frames 变了才算收到新帧（浏览器原生 WS 没有 ping/pong）
@@ -548,7 +548,10 @@ function refresh(dt: number): void {
 
 function loop(now: number): void {
   requestAnimationFrame(loop);
-  const dt = Math.min(0.05, Math.max(0.001, (now - lastNow) / 1000));
+  // 两个 dt：物理/指令/遥测用夹到 50 ms 的 dt（稳定积分）；摄像机与跟随用墙钟 rawDt
+  // （截到 250 ms 防止切后台回来跳帧）。低帧率时镜头手感不该被拖成慢动作。
+  const rawDt = Math.min(0.25, Math.max(0.001, (now - lastNow) / 1000));
+  const dt = Math.min(0.05, rawDt);
   lastNow = now;
   elapsed += dt;
   frameCount++;
@@ -558,9 +561,9 @@ function loop(now: number): void {
     frameCount = 0;
     fpsAcc = 0;
   }
-  step(dt);
+  step(dt, rawDt);
   refresh(dt);
-  stage.render();
+  stage.render(rawDt);
   if (stage.hasG1 && !ready) {
     ready = true;
     panel.log('演示台就绪：拖滑杆即接管（首次交互会把闸门授权给 user）', 'hot');
@@ -592,6 +595,8 @@ requestAnimationFrame((t) => {
 (window as any).__demo = {
   ready: false,
   url: wsUrl,
+  /** 摄像机两态快照：demo-check --camera 的判据全取这里（不读内部字段） */
+  camera: () => stage.cameraState(),
   /** 只读快照：demo-check.mjs 用它核对"页面看到的"与"服务端 /health 里的"是否一致 */
   state: () => {
     const f = body?.frame() ?? null;

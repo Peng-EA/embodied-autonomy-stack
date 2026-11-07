@@ -10,6 +10,8 @@
 //   C) 两档视口各截图一张：testbed/logs/demo-<ts>.png 与 demo-<ts>-1280x800.png
 //   C) 用真实 input 事件把 vx 滑杆拖到 0.5，等 3 s：另开一条 WS 旁听采样 speed，
 //      再读服务端 /health，要求 mode=POLICY 且采样速度 > 0.3 m/s
+//   C2) 摄像机两态（--camera 可只跑这一段）：解锁后 W/滚轮/右键真的动、锁定后三个输入全无效、
+//      切回锁定是 0.4 s 平滑回位而不是瞬移；顺带两张截图（解锁带 hint / 锁定默认机位）
 //
 // 为什么速度来自「另开」的 WS 而不是页面自己的数字：这样「确实在走」不是页面自证。
 // 页面的 __demo.state() 只做交叉核对（打印出来，不作判据）。
@@ -24,12 +26,13 @@ const EDGE = process.env.BROWSER_PATH ?? 'C:/Program Files (x86)/Microsoft/Edge/
 const LIMITS = { sliders: 3, buttons: 10, toggles: 4, speedMin: 0.3, driveSeconds: 3 };
 
 function parseArgs(argv) {
-  const out = { url: null, headed: false, keep: false };
+  const out = { url: null, headed: false, keep: false, camera: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--url') out.url = String(argv[++i]);
     else if (a === '--headed') out.headed = true;
     else if (a === '--keep') out.keep = true;
+    else if (a === '--camera') out.camera = true;
     else if (a === '--help' || a === '-h') out.url = 'HELP';
   }
   return out;
@@ -323,10 +326,281 @@ async function assertLayout(page, label) {
   return { fails };
 }
 
+/** ---------------- 摄像机两态（D3 B）：解锁输入有效 / 锁定全无效 / 回位不瞬移 ----------------
+ * 判据全部来自页面探针 window.__demo.camera()（只读快照），不读内部私有字段。
+ * 每一步都打印实测数字；任何一条不达标都进 fails，最终 exit 1。
+ */
+async function assertCamera(page) {
+  const fails = [];
+  const rows = [];
+  const add = (name, ok, detail) => {
+    rows.push({ name, ok: !!ok, detail });
+    if (!ok) fails.push('[camera] ' + name + ' 失败：' + detail);
+  };
+  const cam = () => page.evaluate(() => window.__demo.camera());
+  const dist3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const angleDeg = (a, b) => {
+    const d = Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]));
+    return (Math.acos(d) * 180) / Math.PI;
+  };
+  const poseDelta = (a, b) => ({
+    pos: dist3(a.position, b.position),
+    fwdDeg: angleDeg(a.forward, b.forward),
+    dist: Math.abs(a.dist - b.dist),
+  });
+  const fmt = (d) => 'pos=' + d.pos.toFixed(6) + ' forward=' + d.fwdDeg.toFixed(6) + '° dist=' + d.dist.toFixed(6);
+  const shots = [];
+
+  // 先把机器人停下：锁定态镜头跟着跟随点走，机器人还在滑行就量不出"输入无效"
+  for (const k of ['vx', 'vz', 'yaw']) {
+    await page.$eval('input[data-slider="' + k + '"]', (el) => {
+      el.value = '0';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+  let speed = null;
+  for (let i = 0; i < 60; i++) {
+    speed = (await page.evaluate(() => window.__demo.state())).speed;
+    if (typeof speed === 'number' && speed < 0.02) break;
+    await sleep(150);
+  }
+  await sleep(1800); // 跟随点收敛（指数趋近；无头 4–5 fps 也给足余量）
+  console.log('[camera] robot_stopped speed=' + (typeof speed === 'number' ? speed.toFixed(4) : String(speed)));
+
+  // A) 默认锁定态：按钮在舞台右上角、图标-only、hover 提示在、操作提示隐藏
+  const dom = await page.evaluate(() => {
+    const stage = document.querySelector('#stage');
+    const btn = document.querySelector('#cam-lock');
+    const hint = document.querySelector('#cam-hint');
+    const R = (el) => {
+      const r = el.getBoundingClientRect();
+      return { x: +r.x.toFixed(1), y: +r.y.toFixed(1), w: +r.width.toFixed(1), h: +r.height.toFixed(1), right: +r.right.toFixed(1), bottom: +r.bottom.toFixed(1) };
+    };
+    const bs = getComputedStyle(btn);
+    const hs = getComputedStyle(hint);
+    return {
+      stage: R(stage),
+      btn: R(btn),
+      hint: R(hint),
+      state: btn.dataset.state,
+      pressed: btn.getAttribute('aria-pressed'),
+      tip: btn.dataset.tip,
+      btnColor: bs.color,
+      btnBg: bs.backgroundColor,
+      btnRadius: bs.borderRadius,
+      iconOnly: (btn.textContent || '').trim() === '' && btn.querySelectorAll('svg').length === 2,
+      hintDisplay: hs.display,
+      hintText: (hint.textContent || '').trim(),
+      locked: window.__demo.camera().locked,
+    };
+  });
+  const c0 = await cam();
+  add('locked_by_default', c0.locked === true && c0.transitioning === false, 'locked=' + c0.locked + ' transitioning=' + c0.transitioning);
+  add(
+    'lock_button_top_right_of_stage',
+    !!dom.btn && dom.btn.right <= dom.stage.right - 8 && dom.btn.right > dom.stage.right - 64 &&
+      dom.btn.y >= dom.stage.y + 8 && dom.btn.y < dom.stage.y + 64 &&
+      dom.btn.w >= 24 && dom.btn.w <= 48 && Math.abs(dom.btn.w - dom.btn.h) <= 1,
+    'btn=' + JSON.stringify(dom.btn) + ' stage.right=' + dom.stage.right + ' stage.y=' + dom.stage.y,
+  );
+  add(
+    'lock_button_style_consistent',
+    dom.iconOnly && dom.btnRadius !== '0px' && dom.btnBg !== 'rgba(0, 0, 0, 0)' && !!dom.tip,
+    'iconOnly=' + dom.iconOnly + ' radius=' + dom.btnRadius + ' bg=' + dom.btnBg + ' tip=' + JSON.stringify(dom.tip),
+  );
+  add(
+    'hint_hidden_when_locked',
+    dom.hintDisplay === 'none' && dom.hintText.indexOf('WASD') >= 0 && dom.hintText.indexOf('滚轮') >= 0 && dom.hintText.indexOf('右键') >= 0,
+    'display=' + dom.hintDisplay + ' text=' + JSON.stringify(dom.hintText),
+  );
+
+  // 悬停提示：::after 得真的能画出来（按钮若是 overflow:hidden，整块提示会被裁掉）
+  const btnBox = await page.$eval('#cam-lock', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  await page.mouse.move(btnBox.x - 6, btnBox.y);
+  await page.mouse.move(btnBox.x, btnBox.y, { steps: 4 });
+  await page.hover('#cam-lock');
+  await sleep(700);
+  const tip = await page.evaluate(() => {
+    const b = document.querySelector('#cam-lock');
+    const s = getComputedStyle(b, '::after');
+    return { opacity: s.opacity, width: parseFloat(s.width), content: s.content, overflow: getComputedStyle(b).overflow, hovered: b.matches(':hover') };
+  });
+  add(
+    'hover_tooltip_visible',
+    parseFloat(tip.opacity) > 0.9 && tip.width > 100 && tip.overflow === 'visible' && tip.content.indexOf('解锁') >= 0,
+    JSON.stringify(tip),
+  );
+
+  // B) 解锁：两态切换 + 提示出现在舞台左下角
+  await page.click('#cam-lock');
+  await sleep(350);
+  const open = await cam();
+  const domOpen = await page.evaluate(() => {
+    const stage = document.querySelector('#stage');
+    const btn = document.querySelector('#cam-lock');
+    const hint = document.querySelector('#cam-hint');
+    const R = (el) => {
+      const r = el.getBoundingClientRect();
+      return { x: +r.x.toFixed(1), y: +r.y.toFixed(1), w: +r.width.toFixed(1), h: +r.height.toFixed(1), right: +r.right.toFixed(1), bottom: +r.bottom.toFixed(1) };
+    };
+    return {
+      stage: R(stage),
+      hint: R(hint),
+      state: btn.dataset.state,
+      pressed: btn.getAttribute('aria-pressed'),
+      tip: btn.dataset.tip,
+      hintDisplay: getComputedStyle(hint).display,
+    };
+  });
+  add('unlock_toggles_state', open.locked === false && domOpen.state === 'free' && domOpen.pressed === 'true', 'locked=' + open.locked + ' state=' + domOpen.state + ' aria-pressed=' + domOpen.pressed);
+  add(
+    'hint_shown_at_stage_bottom_left',
+    open.hintVisible === true && domOpen.hintDisplay !== 'none' &&
+      domOpen.hint.x >= domOpen.stage.x && domOpen.hint.x < domOpen.stage.x + 40 &&
+      domOpen.hint.bottom <= domOpen.stage.bottom - 8 && domOpen.hint.bottom > domOpen.stage.y + domOpen.stage.h * 0.6 &&
+      domOpen.hint.h <= 32,
+    'hint=' + JSON.stringify(domOpen.hint) + ' stage=' + JSON.stringify(domOpen.stage) + ' display=' + domOpen.hintDisplay,
+  );
+
+  const box = await page.$eval('#scene', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  });
+  const cx = box.x + box.w / 2;
+  const cy = box.y + box.h / 2;
+
+  // C) 解锁态 W：相机位置要真的变（>0.05 m），且沿视线前方
+  const wStart = await cam();
+  await page.keyboard.down('w');
+  await sleep(1200);
+  await page.keyboard.up('w');
+  await sleep(450);
+  const wEnd = await cam();
+  const wMove = dist3(wStart.position, wEnd.position);
+  const disp = [wEnd.position[0] - wStart.position[0], 0, wEnd.position[2] - wStart.position[2]];
+  const fwd = [wEnd.forward[0], 0, wEnd.forward[2]];
+  const along = disp[0] * fwd[0] + disp[2] * fwd[2];
+  add('unlocked_W_moves_camera', wMove > 0.05, 'move=' + wMove.toFixed(4) + ' m（阈值 >0.05）');
+  add('unlocked_W_follows_view_direction', along > 0, 'displacement·forward=' + along.toFixed(4) + '（>0 表示朝视线前方）');
+
+  // D) 滚轮一格：距离变化 5–20%
+  await page.mouse.move(cx, cy);
+  const d0 = wEnd.dist;
+  await page.mouse.wheel({ deltaY: -100 });
+  await sleep(800);
+  const zoomed = await cam();
+  const zoomPct = Math.abs(zoomed.dist - d0) / d0;
+  add('unlocked_wheel_zooms_5_20pct', zoomPct >= 0.05 && zoomPct <= 0.2, 'dist ' + d0.toFixed(4) + ' → ' + zoomed.dist.toFixed(4) + ' = ' + (zoomPct * 100).toFixed(2) + '%（阈值 5–20%）');
+
+  // E) 右键拖 200 px：朝向变化 5–40°
+  const f0 = zoomed.forward;
+  await page.mouse.move(cx - 100, cy);
+  await page.mouse.down({ button: 'right' });
+  for (let i = 1; i <= 10; i++) {
+    await page.mouse.move(cx - 100 + i * 20, cy);
+    await sleep(16);
+  }
+  await page.mouse.up({ button: 'right' });
+  await sleep(600);
+  const rotated = await cam();
+  const dragDeg = angleDeg(f0, rotated.forward);
+  add('unlocked_right_drag_rotates_5_40deg', dragDeg >= 5 && dragDeg <= 40, 'forward 变化 ' + dragDeg.toFixed(2) + '°（阈值 5–40°，200 px）');
+
+  // E2) 左键拖同样的 200 px：相机一点都不能动（左键留给页面原有交互，没被抢）
+  const l0 = await cam();
+  await page.mouse.move(cx - 100, cy);
+  await page.mouse.down({ button: 'left' });
+  for (let i = 1; i <= 10; i++) {
+    await page.mouse.move(cx - 100 + i * 20, cy);
+    await sleep(16);
+  }
+  await page.mouse.up({ button: 'left' });
+  await sleep(450);
+  const l1 = await cam();
+  const dL = poseDelta(l0, l1);
+  add('left_drag_does_not_move_camera', dL.pos < 1e-3 && dL.fwdDeg < 1e-3 && dL.dist < 1e-3, fmt(dL));
+
+  // 解锁态截图（带 hint、视角已经动过，和锁定态能一眼分开）
+  await mkdir(path.join(TESTBED, 'logs'), { recursive: true });
+  const shotOpen = path.join(TESTBED, 'logs', 'demo-camera-unlocked-' + stamp() + '.png');
+  await page.screenshot({ path: shotOpen });
+  const stOpen = await stat(shotOpen);
+  shots.push({ label: '解锁态 + hint', file: path.relative(TESTBED, shotOpen), bytes: stOpen.size });
+  if (!stOpen.size) fails.push('[camera] 解锁态截图是空文件');
+
+  // F) 锁定：0.4 s 平滑回默认位（不许瞬移），落点就是默认机位
+  const preLock = await cam();
+  await page.click('#cam-lock');
+  const trace = [];
+  for (let i = 0; i < 10; i++) {
+    await sleep(90);
+    trace.push(await cam());
+  }
+  await sleep(1200);
+  const fin = await cam();
+  const preDist = dist3(preLock.position, fin.defaultPosition);
+  const mids = trace.filter((t) => {
+    const d = dist3(t.position, fin.defaultPosition);
+    return d > 0.02 && d < preDist - 0.01;
+  });
+  add(
+    'lock_transition_smooth_not_instant',
+    trace.some((t) => t.transitioning === true) && mids.length >= 1 && preDist > 0.05,
+    'transitioning=' + trace.some((t) => t.transitioning) + ' 中间帧=' + mids.length + ' 起点离默认=' + preDist.toFixed(3) + ' m · trace=' +
+      trace.map((t) => dist3(t.position, fin.defaultPosition).toFixed(2)).join(','),
+  );
+  add('lock_settles_to_default', fin.locked === true && dist3(fin.position, fin.defaultPosition) < 1e-3, 'end→default=' + dist3(fin.position, fin.defaultPosition).toFixed(6) + ' m');
+  add('locked_hint_hidden', fin.hintVisible === false, 'hintVisible=' + fin.hintVisible);
+
+  // G) 锁定态三个输入各来一次：位姿变化必须 <1e-3
+  const g0 = await cam();
+  await page.keyboard.down('w');
+  await sleep(600);
+  await page.keyboard.up('w');
+  await sleep(250);
+  const g1 = await cam();
+  const dW = poseDelta(g0, g1);
+  add('locked_W_ignored', dW.pos < 1e-3 && dW.fwdDeg < 1e-3 && dW.dist < 1e-3, fmt(dW));
+
+  await page.mouse.move(cx, cy);
+  await page.mouse.wheel({ deltaY: -100 });
+  await sleep(400);
+  const g2 = await cam();
+  const dZ = poseDelta(g1, g2);
+  add('locked_wheel_ignored', dZ.pos < 1e-3 && dZ.fwdDeg < 1e-3 && dZ.dist < 1e-3, fmt(dZ));
+
+  await page.mouse.move(cx - 100, cy);
+  await page.mouse.down({ button: 'right' });
+  for (let i = 1; i <= 10; i++) {
+    await page.mouse.move(cx - 100 + i * 20, cy);
+    await sleep(16);
+  }
+  await page.mouse.up({ button: 'right' });
+  await sleep(400);
+  const g3 = await cam();
+  const dR = poseDelta(g2, g3);
+  add('locked_right_drag_ignored', dR.pos < 1e-3 && dR.fwdDeg < 1e-3 && dR.dist < 1e-3, fmt(dR));
+
+  // 锁定态截图
+  const shotLocked = path.join(TESTBED, 'logs', 'demo-camera-locked-' + stamp() + '.png');
+  await page.screenshot({ path: shotLocked });
+  const stLocked = await stat(shotLocked);
+  shots.push({ label: '锁定态（默认机位）', file: path.relative(TESTBED, shotLocked), bytes: stLocked.size });
+  if (!stLocked.size) fails.push('[camera] 锁定态截图是空文件');
+
+  for (const r of rows) console.log('[camera] ' + (r.ok ? 'PASS' : 'FAIL') + ' ' + r.name + ' · ' + r.detail);
+  for (const s of shots) console.log('[camera] screenshot ' + s.label + ' = ' + s.file + ' (' + Math.round(s.bytes / 1024) + ' KB)');
+  return { fails, pass: rows.filter((r) => r.ok).length, total: rows.length, shots };
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.url === 'HELP') {
-    console.log('node testbed/scripts/demo-check.mjs [--url http://127.0.0.1:5183/] [--headed]');
+    console.log('node testbed/scripts/demo-check.mjs [--url http://127.0.0.1:5183/] [--headed] [--camera]');
+    console.log('  --camera  只跑摄像机两态自检（解锁输入 / 锁定全无效 / 0.4 s 回位），跳过布局与驱动');
     return 0;
   }
 
@@ -393,73 +667,80 @@ async function main() {
     if (counts.buttons < LIMITS.buttons) fails.push('按钮 ' + counts.buttons + ' < ' + LIMITS.buttons);
     if (counts.toggles < LIMITS.toggles) fails.push('开关 ' + counts.toggles + ' < ' + LIMITS.toggles);
 
-    // 截图里把 clearance / 接触打开：这两个开关得在画面上有后果（不是摆着好看）
-    for (const t of ['rays', 'contacts']) await page.click('input[data-toggle="' + t + '"]');
-    await sleep(400);
-    const vis = await page.evaluate(() => {
-      const s = window.__demo.state();
-      return { rays: s.rays, contacts: s.contacts, room: s.room };
-    });
-    line('visual_toggles', 'rays=' + JSON.stringify(vis.rays) + ' contacts=' + JSON.stringify(vis.contacts));
-    if (!vis.rays.visible || vis.rays.count !== 7) fails.push('clearance 射线没画出来：' + JSON.stringify(vis.rays));
-    if (!vis.contacts.visible || vis.contacts.ankles < 2) fails.push('接触标记没就位：' + JSON.stringify(vis.contacts));
+    if (!args.camera) {
+      // 截图里把 clearance / 接触打开：这两个开关得在画面上有后果（不是摆着好看）
+      for (const t of ['rays', 'contacts']) await page.click('input[data-toggle="' + t + '"]');
+      await sleep(400);
+      const vis = await page.evaluate(() => {
+        const s = window.__demo.state();
+        return { rays: s.rays, contacts: s.contacts, room: s.room };
+      });
+      line('visual_toggles', 'rays=' + JSON.stringify(vis.rays) + ' contacts=' + JSON.stringify(vis.contacts));
+      if (!vis.rays.visible || vis.rays.count !== 7) fails.push('clearance 射线没画出来：' + JSON.stringify(vis.rays));
+      if (!vis.contacts.visible || vis.contacts.ankles < 2) fails.push('接触标记没就位：' + JSON.stringify(vis.contacts));
 
-    // B) 1440×900 布局断言：面板不裁、状态吸顶、曲线卡片完整可见、事件折叠、字号/网格
-    const lay1440 = await assertLayout(page, '1440x900');
-    fails.push(...lay1440.fails);
+      // B) 1440×900 布局断言：面板不裁、状态吸顶、曲线卡片完整可见、事件折叠、字号/网格
+      const lay1440 = await assertLayout(page, '1440x900');
+      fails.push(...lay1440.fails);
 
-    const before = await page.evaluate(() => window.__demo.state());
-    const audit = await openAuditSocket(sim.url);
-    const t0 = Date.now();
-    await page.$eval('input[data-slider="vx"]', (el) => {
-      el.value = '0.5';
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+      const before = await page.evaluate(() => window.__demo.state());
+      const audit = await openAuditSocket(sim.url);
+      const t0 = Date.now();
+      await page.$eval('input[data-slider="vx"]', (el) => {
+        el.value = '0.5';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      });
 
-    await sleep(2500);
-    await mkdir(path.join(TESTBED, 'logs'), { recursive: true });
-    const shotPath = path.join(TESTBED, 'logs', 'demo-' + stamp() + '.png');
-    await page.screenshot({ path: shotPath });
-    const shotStat = await stat(shotPath);
-    line('screenshot_1440x900', path.relative(TESTBED, shotPath) + ' (' + Math.round(shotStat.size / 1024) + ' KB)');
-    if (!shotStat.size) fails.push('截图是空文件');
+      await sleep(2500);
+      await mkdir(path.join(TESTBED, 'logs'), { recursive: true });
+      const shotPath = path.join(TESTBED, 'logs', 'demo-' + stamp() + '.png');
+      await page.screenshot({ path: shotPath });
+      const shotStat = await stat(shotPath);
+      line('screenshot_1440x900', path.relative(TESTBED, shotPath) + ' (' + Math.round(shotStat.size / 1024) + ' KB)');
+      if (!shotStat.size) fails.push('截图是空文件');
 
-    const elapsedMs = Date.now() - t0;
-    if (elapsedMs < LIMITS.driveSeconds * 1000) await sleep(LIMITS.driveSeconds * 1000 - elapsedMs);
+      const elapsedMs = Date.now() - t0;
+      if (elapsedMs < LIMITS.driveSeconds * 1000) await sleep(LIMITS.driveSeconds * 1000 - elapsedMs);
 
-    const drive = audit.samples.filter((s) => s.at - t0 <= LIMITS.driveSeconds * 1000 + 400);
-    const maxSpeed = drive.reduce((m, s) => Math.max(m, s.speed), 0);
-    const p50 = median(drive.map((s) => s.speed));
-    const lastMode = drive.length ? drive[drive.length - 1].mode : null;
-    line('ws_samples', drive.length + ' name=' + audit.name + ' mode_last=' + lastMode);
-    line('speed_max', maxSpeed.toFixed(3) + ' speed_p50=' + (Number.isFinite(p50) ? p50.toFixed(3) : 'NaN'));
+      const drive = audit.samples.filter((s) => s.at - t0 <= LIMITS.driveSeconds * 1000 + 400);
+      const maxSpeed = drive.reduce((m, s) => Math.max(m, s.speed), 0);
+      const p50 = median(drive.map((s) => s.speed));
+      const lastMode = drive.length ? drive[drive.length - 1].mode : null;
+      line('ws_samples', drive.length + ' name=' + audit.name + ' mode_last=' + lastMode);
+      line('speed_max', maxSpeed.toFixed(3) + ' speed_p50=' + (Number.isFinite(p50) ? p50.toFixed(3) : 'NaN'));
 
-    const health = await healthJson(sim.healthUrl);
-    const healthMode = health && health.mode ? health.mode.mode : null;
-    const healthSwitches = health && health.mode ? health.mode.switches : null;
-    line('health_mode', String(healthMode) + ' switches=' + healthSwitches + ' clients=' + (health ? health.clients : '?'));
-    if (healthMode !== 'POLICY') fails.push('/health mode=' + healthMode + ' != POLICY');
-    if (!(maxSpeed > LIMITS.speedMin)) fails.push('WS 采样最大速度 ' + maxSpeed.toFixed(3) + ' <= ' + LIMITS.speedMin);
+      const health = await healthJson(sim.healthUrl);
+      const healthMode = health && health.mode ? health.mode.mode : null;
+      const healthSwitches = health && health.mode ? health.mode.switches : null;
+      line('health_mode', String(healthMode) + ' switches=' + healthSwitches + ' clients=' + (health ? health.clients : '?'));
+      if (healthMode !== 'POLICY') fails.push('/health mode=' + healthMode + ' != POLICY');
+      if (!(maxSpeed > LIMITS.speedMin)) fails.push('WS 采样最大速度 ' + maxSpeed.toFixed(3) + ' <= ' + LIMITS.speedMin);
 
-    const after = await page.evaluate(() => window.__demo.state());
-    line('page_state', JSON.stringify({
-      mode: after.mode, speed: after.speed, vx: after.sliders.vx, cmd: after.gate.cmd,
-      source: after.gate.source, yawGain: after.gate.yawGain, mesh: after.mesh, room: after.room,
-    }));
-    line('gate_before', JSON.stringify({ mode: before.mode, speed: before.speed, source: before.gate.source, cmd: before.gate.cmd }));
-    audit.close();
+      const after = await page.evaluate(() => window.__demo.state());
+      line('page_state', JSON.stringify({
+        mode: after.mode, speed: after.speed, vx: after.sliders.vx, cmd: after.gate.cmd,
+        source: after.gate.source, yawGain: after.gate.yawGain, mesh: after.mesh, room: after.room,
+      }));
+      line('gate_before', JSON.stringify({ mode: before.mode, speed: before.speed, source: before.gate.source, cmd: before.gate.cmd }));
+      audit.close();
 
-    // B + C) 第二档视口 1280×800：同一份布局断言再量一遍，再来一张图
-    await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
-    await sleep(600);
-    const lay1280 = await assertLayout(page, '1280x800');
-    fails.push(...lay1280.fails);
-    const shot2Path = path.join(TESTBED, 'logs', 'demo-' + stamp() + '-1280x800.png');
-    await page.screenshot({ path: shot2Path });
-    const shot2Stat = await stat(shot2Path);
-    line('screenshot_1280x800', path.relative(TESTBED, shot2Path) + ' (' + Math.round(shot2Stat.size / 1024) + ' KB)');
-    if (!shot2Stat.size) fails.push('1280×800 截图是空文件');
-    await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+      // B + C) 第二档视口 1280×800：同一份布局断言再量一遍，再来一张图
+      await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
+      await sleep(600);
+      const lay1280 = await assertLayout(page, '1280x800');
+      fails.push(...lay1280.fails);
+      const shot2Path = path.join(TESTBED, 'logs', 'demo-' + stamp() + '-1280x800.png');
+      await page.screenshot({ path: shot2Path });
+      const shot2Stat = await stat(shot2Path);
+      line('screenshot_1280x800', path.relative(TESTBED, shot2Path) + ' (' + Math.round(shot2Stat.size / 1024) + ' KB)');
+      if (!shot2Stat.size) fails.push('1280×800 截图是空文件');
+      await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+    }
+
+    // C2) 摄像机两态（D3 B）：解锁输入有效 / 锁定全无效 / 回位不瞬移
+    const camRes = await assertCamera(page);
+    fails.push(...camRes.fails);
+    line('camera_checks', camRes.pass + '/' + camRes.total);
 
     line('console_errors', errors.length);
     if (errors.length) {
