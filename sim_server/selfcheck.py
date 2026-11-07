@@ -35,6 +35,14 @@
    几何全部来自 sim_server/scene.json（= physics.ts 的同一份中心/半长），本文件不写坐标。
    出生点离桌子正面的 2.0 m 是**测试布置**不是判据：它只决定「撞上发生在第几秒」。
 
+5) P5 --stop-abrupt：cmd=0.5 走 5 s → **立刻** cmd=0（模拟 L2 反射 walk→idle 打断），
+   反复跑并打印每次 fell / z_min / stop_s（速度首次 <0.05 的耗时）/ hand_over_s /
+   v_hand（交接时速度）/ v_max（打断后的最大速度）。
+     server/.venv/Scripts/python.exe -m sim_server.selfcheck --stop-abrupt --trials 5
+   达标：falls=0/5。旧的一段式交接用 --legacy-handover 复跑（对照实验，默认不用），
+   旧行为在旧代码上是 5/5 摔（z_min≈0.040），不许悄悄删。
+   这一项是**测试布置**不是判据：walk 5 s 的时长只决定打断发生在第几秒。
+
 口径（README「指标定义」同款，别处不要另编）：
 - height  当前位姿下最高网格顶点离地面（z=0）的高度，m；每 0.5 s 采一次，报末值，
           同时在 stderr 打出全程 min/max 供核对。
@@ -86,6 +94,14 @@ JOINT_EPS = 1e-3           # 超限判定容差（mujoco 约束力会让关节�
 WALK_CMD = {"vx": 0.5, "vz": 0.0, "yaw": 0.0}
 STAND_CMD = {"vx": 0.0, "vz": 0.0, "yaw": 0.0}
 SWITCH_PHASE_S = 5.0
+
+# ---- P5 --stop-abrupt（测试布置，不是判据）----
+# 场景：cmd 0.5 走 STOP_ABRUPT_WALK_S 秒 → **立刻** cmd=0（模拟 L2 反射 walk→idle 打断），
+# 观察交接（POLICY→HOLD）那一刻还剩多少速度、多久真正停住、以及摔没摔。
+STOP_ABRUPT_CMD = WALK_CMD
+STOP_ABRUPT_WALK_S = 5.0
+STOP_ABRUPT_TAIL_S = 6.0
+STOP_SPEED_EPS = 0.05        # 「停住」口径（任务书 P5：|v|<0.05 m/s 才允许交棒）
 
 # ---- P2a --mimic 判据（任务书原文）----
 MIMIC_FELL_Z = 0.5          # 与 --walk 同一个「摔」口径：pelvis z ≤ 0.5
@@ -380,6 +396,140 @@ def _run_walk(args: argparse.Namespace) -> int:
         fails.append(f"switch no_fall=False (z_min {sw_z_min:.4f})")
     if fails:
         print("FAIL: " + "; ".join(fails), file=sys.stderr)
+        return 1
+    return 0
+
+
+# ---------- P5 --stop-abrupt ----------
+
+
+def _stop_abrupt_trial(args: argparse.Namespace) -> dict[str, Any]:
+    """走 5 s → 立刻 cmd=0，量「交接那一刻的速度」与「摔不摔」。**只量不判**。
+
+    口径（与任务书 P5 对齐，别处不要另编）：
+    - stop_s     从 cmd 归零那一步到 pelvis 水平速度首次 < STOP_SPEED_EPS 的仿真秒数；
+                 一直没停住 / 停住前就摔了，如实打 n/a 或照实报。
+    - hand_over_s / v_hand   mode 从 POLICY 变成 HOLD 那一步相对打断的时刻与当时的 |v|。
+    - fell       全程 pelvis z ≤ WALK_FELL_Z（与 --walk 同一个口径）。
+    - v_max      打断之后的最大水平速度（动量有没有被刹住，看这个）。
+    """
+    t_load = time.perf_counter()
+    world = World(args.xml)
+    hold = PoseHold(world)
+    mode = ModeController(world, hold)
+    try:
+        mode.load_policy()                # 缺权重 / 尺寸 / md5 不对，这里当场炸
+    except Exception as exc:              # noqa: BLE001
+        raise RuntimeError(f"策略权重不可用：{exc}") from exc
+    # 对照实验：旧交接判据（1.5 s 硬交班）留一个开关，不许悄悄删掉旧行为
+    mode.legacy_handover = bool(getattr(args, "legacy_handover", False))
+    load_s = time.perf_counter() - t_load
+
+    world.reset()
+    mode.reset()
+    mode.set_cmd(STOP_ABRUPT_CMD)
+    world.set_cmd(STOP_ABRUPT_CMD)
+
+    z_min = float(world.data.qpos[2])
+    nan = False
+    t_end = world.data.time + STOP_ABRUPT_WALK_S
+    while world.data.time < t_end:
+        mode.advance(STEPS_PER_TICK)
+        z_min = min(z_min, float(world.data.qpos[2]))
+        if not world.finite():
+            nan = True
+            break
+
+    # 打断：反射把 cmd 一把清零（真实链路就是这样，不做平滑）
+    t_int = float(world.data.time)
+    v_int = _speed(world)
+    mode.set_cmd(STAND_CMD)
+    world.set_cmd(STAND_CMD)
+
+    prev_mode = mode.mode
+    t_stop: float | None = None
+    t_hand: float | None = None
+    v_hand: float | None = None
+    v_max = v_int
+    t_fall: float | None = None
+    t_end = t_int + STOP_ABRUPT_TAIL_S
+    while world.data.time < t_end:
+        mode.advance(STEPS_PER_TICK)
+        t = float(world.data.time)
+        z = float(world.data.qpos[2])
+        z_min = min(z_min, z)
+        if z <= WALK_FELL_Z and t_fall is None:
+            t_fall = t - t_int
+        v = _speed(world)
+        v_max = max(v_max, v)
+        if t_stop is None and v < STOP_SPEED_EPS:
+            t_stop = t - t_int
+        if prev_mode == "POLICY" and mode.mode == "HOLD":
+            t_hand = t - t_int
+            v_hand = v
+        prev_mode = mode.mode
+        if not world.finite():
+            nan = True
+            break
+
+    return {
+        "load_s": load_s,
+        "sim_s": float(world.data.time),
+        "v_int": v_int,
+        "v_max": v_max,
+        "t_stop": t_stop,
+        "t_hand": t_hand,
+        "v_hand": v_hand,
+        "brake_s": float(mode.brake_s),
+        "z_min": z_min,
+        "fell": bool(z_min <= WALK_FELL_Z),
+        "t_fall": t_fall,
+        "nan": nan,
+        "mode_end": mode.mode,
+        "warns": list(getattr(mode, "warnings", [])),
+        "switches": mode.switches,
+    }
+
+
+def _run_stop_abrupt(args: argparse.Namespace) -> int:
+    """P5：反复跑 --stop-abrupt，打印每次 fell / z_min / 停止耗时 / 交接时速度。"""
+    n = max(1, int(args.trials))
+    rows: list[dict[str, Any]] = []
+    print(
+        f"stop-abrupt: cmd=({STOP_ABRUPT_CMD['vx']},{STOP_ABRUPT_CMD['vz']},"
+        f"{STOP_ABRUPT_CMD['yaw']}) walk={STOP_ABRUPT_WALK_S:g}s -> cmd=0 instantly, "
+        f"tail={STOP_ABRUPT_TAIL_S:g}s stop_eps={STOP_SPEED_EPS:g}m/s trials={n} "
+        f"legacy_handover={bool(getattr(args, 'legacy_handover', False))}"
+    )
+    try:
+        for i in range(n):
+            r = _stop_abrupt_trial(args)
+            rows.append(r)
+
+            def _f(x: float | None, fmt: str = ".3f") -> str:
+                return "n/a" if x is None else format(x, fmt)
+
+            warn = f" warn={len(r['warns'])}" if r["warns"] else ""
+            print(
+                f"trial {i + 1}/{n} fell={r['fell']} z_min={r['z_min']:.4f} "
+                f"stop_s={_f(r['t_stop'])} hand_over_s={_f(r['t_hand'])} "
+                f"v_hand={_f(r['v_hand'])} brake_s={r['brake_s']:.3f} "
+                f"v_int={r['v_int']:.3f} v_max={r['v_max']:.3f} "
+                f"t_fall={_f(r['t_fall'])} mode_end={r['mode_end']}{warn}"
+            )
+    except RuntimeError as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return 2
+
+    falls = sum(1 for r in rows if r["fell"])
+    nan = any(r["nan"] for r in rows)
+    print(
+        f"stop_abrupt: trials={n} falls={falls}/{n} z_min={min(r['z_min'] for r in rows):.4f} "
+        f"v_hand_max={max((r['v_hand'] for r in rows if r['v_hand'] is not None), default=float('nan')):.3f} "
+        f"nan={nan}"
+    )
+    if falls or nan:
+        print(f"FAIL: {falls}/{n} fell (z_min<={WALK_FELL_Z})" + ("; nan" if nan else ""), file=sys.stderr)
         return 1
     return 0
 
@@ -812,6 +962,18 @@ def main(argv: list[str] | None = None) -> int:
         "--collide", action="store_true", help="P1：朝桌子走 8 s，量 blocked / 穿透 / 摔没摔"
     )
     ap.add_argument(
+        "--stop-abrupt", action="store_true",
+        help="P5：cmd 0.5 走 5 s → 立刻 cmd=0（反射打断），打印每次交接速度 / 停止耗时 / 摔没摔",
+    )
+    ap.add_argument(
+        "--trials", type=int, default=1,
+        help="--stop-abrupt 重复次数（默认 1）",
+    )
+    ap.add_argument(
+        "--legacy-handover", action="store_true",
+        help="P5 复跑旧行为：交接判据用旧的 1.5 s 硬交班（只给对照实验，验收不用它）",
+    )
+    ap.add_argument(
         "--collide-gap", type=float, default=COLLIDE_GAP_M,
         help=f"collide 起点离桌子正面的距离，m（默认 {COLLIDE_GAP_M}；不是判据）",
     )
@@ -825,12 +987,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
     picked = [
-        name for name in ("walk", "collide", "mimic", "mimic_candidates") if getattr(args, name)
+        name
+        for name in ("walk", "collide", "mimic", "mimic_candidates", "stop_abrupt")
+        if getattr(args, name)
     ]
     if len(picked) > 1:
-        ap.error("--walk / --collide / --mimic / --mimic-candidates 是四套自检，别一起跑")
+        ap.error("--walk / --collide / --mimic / --mimic-candidates / --stop-abrupt 是五套自检，别一起跑")
     if args.walk:
         return _run_walk(args)
+    if args.stop_abrupt:
+        return _run_stop_abrupt(args)
     if args.collide:
         return _run_collide(args)
     if args.mimic_candidates:

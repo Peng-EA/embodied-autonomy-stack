@@ -27,16 +27,29 @@
     RAMP_S = 0.2 s  线性 ramp，不许瞬跳。
 
 **退货不能硬切**（实测）：走路时把 cmd 一把清零就立刻回 HOLD，等于让「没有任何减速能力的
-pose hold」接一个 0.5 m/s 的动量 —— 双腿瞬间拉直、脚在地上打滑，t+1.5 s 倒地（z 0.79→0.06）。
-所以回 HOLD 之前要先把速度刹下去，刹车归**策略**做（cmd 喂 0 = 原地踏步，它本来就是这么训的）：
+pose hold」接一个 0.5 m/s 的动量 —— 双腿瞬间拉直、脚在地上打滑，t+2.2 s 倒地（z 0.79→0.04）。
+所以回 HOLD 之前要先把速度刹下去，刹车归**策略**做（它本来就是训来跟踪速度命令的）。
 
-    BRAKE_LINVEL = 0.18 m/s   平滑速度低于它才允许交棒（略高于 HOLD 的 0.15 进入阈值）
-    BRAKE_MIN_S  = 0.2 s      刹车至少这么长（防一帧误判）
-    BRAKE_MAX_S  = 1.5 s      到点必交棒（策略原地踏步会漂，久刹不划算）
-    BRAKE_TAU_S  = 0.15 s     速度平滑（EMA）时间常数
+P5 起交棒改成三段（selfcheck --stop-abrupt 可复跑；旧的一段式用 --legacy-handover
+保留做对照，不许悄悄删）：
 
-刹车段 mode 仍然是 POLICY（策略在控、真的在动），**不是**拿 POLICY 冒充站住：
-停机稳态一定落到 HOLD，刹车最多 1.5 s。
+    1) 命令 ramp：POLICY 内把「打断前最后一个运动命令」在 BRAKE_CMD_RAMP_S = 0.4 s
+       内线性降到 0（不是把 0 一步喂进去——那等于让策略瞬间改跟踪目标，动量还在）。
+    2) 等停住：|v| < BRAKE_STOP_LINVEL = 0.05 m/s 才允许交棒；BRAKE_MAX_S = 1.5 s
+       是判「刹不住」的时刻，**不是**交棒时刻。
+    3) 交接：mode 回 HOLD，但 RAMP_S = 0.2 s 内**不冻结**策略目标——让策略继续
+       原地踏步（cmd=0），目标与增益一起线性归位。冻结 mid-stride 目标再拉回 stand
+       是另一个独立的摔因：同一交接速度（0.03 m/s）换个相位就倒（实测 0.94 s 稳、
+       1.18 s 倒）；不冻结后 16 个相位全稳（见 selfcheck --stop-abrupt）。
+
+超时（1.5 s）还没停住：**留在 POLICY 继续刹**，不交棒，并打一条 RuntimeWarning
+（模块 warnings 列表里留痕，selfcheck 会把它打出来）。刹车段 mode 仍然是 POLICY
+（策略在控、真的在动），**不是**拿 POLICY 冒充站住。常量：
+
+    BRAKE_LINVEL = 0.18 m/s   旧一段式判据（只给 --legacy-handover 用）
+    BRAKE_MIN_S  = 0.2 s      旧一段式最短刹车时间
+    BRAKE_MAX_S  = 1.5 s      刹车超时：旧行为=硬交棒；新行为=留 POLICY + warn
+    BRAKE_TAU_S  = 0.15 s     速度平滑（EMA）时间常数（观测用，不参与交棒判据）
 
 ramp 期间同时插值三样东西：29 个位置目标、kp（500 ↔ 75）、kd（模型临界阻尼 ↔ 2）。
 只插值增益不插值目标 = 目标瞬跳 + 软增益；只插值目标不插值增益 = 软目标 + 硬增益（抽）。
@@ -78,6 +91,7 @@ gamma 与判据都不动：POLICY 的 ENTER/EXIT/BRAKE 一个数没改（--walk 
 from __future__ import annotations
 
 import math
+import warnings
 from typing import Any, Callable, Mapping
 
 import mujoco
@@ -109,6 +123,10 @@ BRAKE_LINVEL = 0.18
 BRAKE_MIN_S = 0.20
 BRAKE_MAX_S = 1.50
 BRAKE_TAU_S = 0.15
+
+# @own —— P5 三段交接（任务书：命令 ≤0.4 s 线性到 0 → |v|<0.05 才 ramp 交接）
+BRAKE_STOP_LINVEL = 0.05   # 交棒前 pelvis 水平速度必须低于它
+BRAKE_CMD_RAMP_S = 0.40    # 速度命令从「打断前的最后一个运动命令」线性降到 0 的时间
 
 
 class ModeController:
@@ -156,6 +174,11 @@ class ModeController:
         self.braking = False
         self._brake_t = 0.0
         self._ema_speed = 0.0
+        # P5 三段交接：打断前最后一个运动命令（命令 ramp 的起点）/ 警告留痕 / 旧行为开关
+        self._last_move_cmd: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._brake_warned = False
+        self.warnings: list[str] = []
+        self.legacy_handover = False
         self._gains_touched = False
         self.step_counter = 0
         self.switches = 0
@@ -179,6 +202,9 @@ class ModeController:
         self.braking = False
         self._brake_t = 0.0
         self._ema_speed = 0.0
+        self._last_move_cmd = (0.0, 0.0, 0.0)
+        self._brake_warned = False
+        self.warnings = []
         self.brake_s = 0.0
         self.switches = 0
         self._act_tgt = None
@@ -393,24 +419,62 @@ class ModeController:
             if want:
                 self.braking = False          # 刹车中又给命令：取消刹车，直接走
                 self._brake_t = 0.0
+                self._brake_warned = False
+                self._last_move_cmd = self._cmd
             elif quiet:
                 if not self.braking:
                     self.braking = True       # 先刹再交棒（见模块 docstring）
                     self._brake_t = 0.0
+                    self._brake_warned = False
                 else:
                     self._brake_t += CTRL_DT_SIM
-                if self._brake_t >= BRAKE_MAX_S or (
-                    self._brake_t >= BRAKE_MIN_S and self._ema_speed < BRAKE_LINVEL
-                ):
+                speed = self.horiz_speed()
+                if self.legacy_handover:
+                    # 旧一段式（对照实验）：1.5 s 到点硬交棒，不看 0.05
+                    if self._brake_t >= BRAKE_MAX_S or (
+                        self._brake_t >= BRAKE_MIN_S and self._ema_speed < BRAKE_LINVEL
+                    ):
+                        self._hand_over_hold()
+                elif self._brake_t >= BRAKE_CMD_RAMP_S and speed < BRAKE_STOP_LINVEL:
+                    # 三段交接：命令 ramp 已完成 + |v| 真的低了，才开始 HOLD 的 ramp
                     self._hand_over_hold()
+                elif self._brake_t >= BRAKE_MAX_S:
+                    # 超时没刹住：不交棒，留在 POLICY 继续刹（只 warn 一次）
+                    self._warn_brake_timeout(speed)
         elif self.mode == MIMIC:
             if want:
                 self._mimic_exit()            # 速度命令抢走：走同一套退场 ramp
             else:
                 self._mimic_tick()
 
+        if (
+            self.mode == HOLD
+            and self.alpha > 0.0
+            and self.policy is not None
+            and self._mimic_phase == "idle"
+            and not self.legacy_handover
+        ):
+            # P5 第 3 段：交接 ramp 期间**不冻结**策略目标 —— 让策略继续原地踏步
+            # （cmd=0），目标与增益一起线性归位。实测：冻结 mid-stride 目标再用 0.2 s
+            # 拉回 stand，交接相位一换就侧翻（同一速度 0.03 m/s，0.94 s 交接稳、
+            # 1.18 s 交接倒）；让踏步继续跑完这 0.2 s，16 个相位全都不摔。
+            self._act_tgt = self.policy.step_control((0.0, 0.0, 0.0))[0]
+
         if self.mode == POLICY and self.policy is not None:
-            pol_cmd = (0.0, 0.0, 0.0) if self.braking else self._cmd
+            if self.braking and self.legacy_handover:
+                pol_cmd = (0.0, 0.0, 0.0)   # 旧行为：0 一步喂进去（对照实验专用）
+            elif self.braking:
+                # P5 第 1 段：命令 ramp —— 从打断前的最后一个运动命令线性降到 0，
+                # 不许把 0 一步喂进去（那样策略瞬间改跟踪目标，动量原样交给下一步）
+                done = min(1.0, self._brake_t / BRAKE_CMD_RAMP_S)
+                scale = 1.0 - done
+                pol_cmd = (
+                    self._last_move_cmd[0] * scale,
+                    self._last_move_cmd[1] * scale,
+                    self._last_move_cmd[2] * scale,
+                )
+            else:
+                pol_cmd = self._cmd
             self._act_tgt = self.policy.step_control(pol_cmd)[0]
 
     def _update_ema(self) -> None:
@@ -438,6 +502,8 @@ class ModeController:
         self.mode = POLICY
         self.braking = False
         self._brake_t = 0.0
+        self._brake_warned = False
+        self._last_move_cmd = self._cmd     # 命令 ramp 的起点：进场时的运动命令
         self.switches += 1
 
     def _hand_over_hold(self) -> None:
@@ -445,8 +511,21 @@ class ModeController:
         self.mode = HOLD
         self.braking = False
         self._brake_t = 0.0
+        self._brake_warned = False
         self._ramp_s = RAMP_S
         self.switches += 1
+
+    def _warn_brake_timeout(self, speed: float) -> None:
+        """超时没刹住：留在 POLICY 继续刹，只 warn 一次（不静默、也不每帧刷屏）。"""
+        if self._brake_warned:
+            return
+        self._brake_warned = True
+        msg = (
+            f"刹车 {BRAKE_MAX_S:g}s 没收住（|v|={speed:.3f} > {BRAKE_STOP_LINVEL:g} m/s）："
+            "不交接给 HOLD，留在 POLICY 继续刹"
+        )
+        self.warnings.append(msg)
+        warnings.warn(msg, RuntimeWarning, stacklevel=2)
 
     def _ramp(self, dt: float) -> None:
         target = 1.0 if self.mode in (POLICY, MIMIC) else 0.0
@@ -509,6 +588,10 @@ class ModeController:
             "braking": self.braking,
             "brake_s": round(self.brake_s, 3),
             "speed_ema": round(self._ema_speed, 3),
+            "brake_stop_linvel": BRAKE_STOP_LINVEL,
+            "brake_cmd_ramp_s": BRAKE_CMD_RAMP_S,
+            "warnings": list(self.warnings),
+            "legacy_handover": self.legacy_handover,
             "switches": self.switches,
             "policy_loaded": self.policy is not None,
             "policy_error": self.policy_error,

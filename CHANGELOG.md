@@ -11,6 +11,12 @@
 
 ### Added
 
+- **修复"带动量交接给 pose hold 会侧翻"（P5）**：`modes.py` 的交接改为三段——POLICY 内命令 0.4 s 线性降到 0 →
+  等 |v|<0.05 m/s（1.5 s 超时不交接，留在 POLICY 继续刹并 warn）→ 0.2 s `RAMP_S` 交接；且 ramp 期间**不冻结**策略目标，
+  让策略继续原地踏步（冻结目标时同一速度换相位就倒：扫 16 个相位 6 摔，改后 16/16 不摔）。
+  实测 `--stop-abrupt --trials 5`：旧代码 **5/5 摔**（`--legacy-handover` 可复现，逐位一致）→ 只做三段仍 5/5 摔 →
+  最终 **0/5 摔**（z_min 0.7253、交接时 0.041 m/s、0.928 s 站停）。`--walk`/HOLD 判据数值逐项未变；
+  修后重跑 P4 验收 2 轮 2/2 不摔（含修前会摔的 L2 反射场景）。
 - **四层闭环验收脚本（P4）**：新增 `testbed/scripts/run-l4.mjs`——Edge headless 开 `?body=g1&auto=1`，让页面的 L1→L3→L4
   经 `cmd-gate(autonomy)` 驱动 WS 里的真 G1，每 40 ms 采样写 `testbed/logs/l4-*.jsonl`（全部 `source:"ws"`）。
   实测 n=3：**2 过 1 摔**。链路可复现（L4 采纳 1 次、压力 0.88→0.52、走了 ≥1 m、到点停），
