@@ -1,6 +1,6 @@
 # ETS-Testbed · 可复现的具身时间尺度跑分台
 
-> 状态：草案（v0.2.0 已跑出第一份数据） · 最后更新 2026-11-06
+> 状态：草案（v0.2.0 已跑出第一份数据） · 最后更新 2026-11-07
 
 `testbed/` 是 v0.2 起的**第二套栈**：TypeScript + Rapier（刚体碰撞）+ Three.js（渲染）+ uPlot（曲线），
 物理控制环在 Web Worker 里跑 100 Hz，LLM 是异步外部服务。
@@ -134,7 +134,7 @@ G1 的 MuJoCo 仿真搬到 Python 权威环（`docs/plan-g1-gait-ik-collision.md
 | C→S | `{"t":<client_ts>,"cmd":{"vx","vz","yaw"},"jointTargets":<关节目标 或 null>}` |
 | S→C | `{"tSim","x","y","z","yaw","speed","blocked","joints","geom":{"xpos","xmat"},"contacts"}`（键与 `body.ts` 的 `BodyState` 一一对应，three 右手系） |
 | 场景 | `testbed/public/mujoco/g1/g1.xml` + 按 `room.xml` 同参数补的 floor（`g1.xml` 本身没有地面，不补会 `ncon=0`、机身掉到 z=−4414） |
-| 行 | `python -m sim_server.app`（服务）· `python -m sim_server.selfcheck --seconds 30`（自检，达标才 exit 0） |
+| 行 | `python -m sim_server.app`（服务）· `python -m sim_server.selfcheck --seconds 5`（自检，达标才 exit 0）· `node testbed/scripts/probe-ws.mjs --seconds 60`（客户端延迟探针，六项不达标 exit 1） |
 
 **站立是 pose hold，不是步态。** 目标取 keyframe `stand` 的 `key_ctrl`（实测等于 `qpos[7:]`），
 kp=500 读自 `g1.xml` 的 `kp="500"`，kd=4.54–16.20 由 `dampratio="1"` 编译折算后读 `biasprm`——没有一个手填增益。
@@ -152,7 +152,45 @@ kp=500 读自 `g1.xml` 的 `kp="500"`，kd=4.54–16.20 由 `dampratio="1"` 编�
 
 与浏览器 wasm 版记录的 1.34 m 差 1.8 cm：两处量法不同（这里是 `stand` 姿态下 mesh 顶点最高点），
 是否为姿态下沉**未排查（TBD）**。仿真/墙钟 = 0.96×（30.02 s 仿真用了 31.27 s），`--hz 62.5` 可压到 1:1。
-往返延迟 P95 与 "60 s 无丢帧" **TBD**：浏览器客户端未接（P0b）。
+
+### 客户端接缝（P0b · `testbed/src/console/g1-body-ws.ts`）
+
+浏览器那份 `Body` 实现换成 WS 客户端。契约（`body.ts` 的 `BodyCommand` / `BodyState` / `Body`）一个字没改——
+L1/L3/L4、遥测、遇障判定照旧只读 `BodyState`。
+
+| 项 | 行为 |
+|---|---|
+| 后端开关 | 默认 WS（连 `ws://127.0.0.1:8788/sim`）；`?sim=wasm` 仍是浏览器内 `@mujoco/mujoco` 那一档（离线可用、不需要 Python） |
+| 首连超时 | 1.5 s 内没连上就算失败；**用户没强制 `?sim=wasm` 时**回落 wasm，并在界面 sys 日志留一条「WS 连接失败：… → 降级浏览器内 wasm」 |
+| 自动重连 | 断线后退避 1 s 起步、每次翻倍、封顶 5 s；连上重置回 1 s |
+| `degraded` | 连接断了、或帧停 500 ms 以上 = true。**不伪造数据**：`state()` 返回最后一帧真实状态（`tSim` 不前进），帧数/RTT 照实计；一帧都没到手时 `state()` 直接抛错，`create()` 也不会 resolve 出一个空壳 |
+| `onFallback` | 运行期断线超过 10 s 仍未恢复 → 回调一次（界面打 sys 事件），重连本身继续 |
+| 上行 | 指令按 60 Hz 上限发（动画帧 120 fps 时不会刷爆 WS） |
+| 缺什么 | 这一档**没有网格**：帧里有 `geom.xpos/xmat`，但画出来还要 `meshes/parts`，那份仍只有 wasm 档有；界面上先用占位角色当可见体。几何搬服务端属 P0c |
+| `reset()` | 服务端没有复位端点，`Body.reset()` 只能把指令清零；骨盆位置要重启 `sim_server` |
+
+**客户端延迟实测（2026-11-07 · 本机 · n=3 · `node testbed/scripts/probe-ws.mjs --seconds 60`，表里是第一次）**
+
+| 指标 | 实测 | 判据 |
+|---|---|---|
+| 窗口内 state 帧 | 3558（59.3 Hz 等效，60 Hz 满分 3600） | ≥ 3500 |
+| 往返延迟 P95 | 2.41 ms（WS 协议层 ping/pong，233 次采样） | ≤ 15 ms |
+| 关节数 | 29 | = 29 |
+| 骨盆高 `y` | 0.791614 m（窗口内 min = max） | 0.75–0.85 |
+| 丢失帧 | 37（按 `tSim` 每 tick +0.016 s 推算） | 仅报告 |
+| 重连 | 0 | 仅报告 |
+
+**这两个数别混用**：ping/pong 量的是传输 + 事件环往返；指令到生效还多一层 tick 量化
+（同机另测 cmd→下一帧：p50 1.56 ms / p95 15.86 ms，n=163），后者才是"按下去多久看到动"。
+
+同机复跑三次（n=3）：frames=3558 / 3549 / 3558、p95_rtt=2.41 / 2.37 / 2.16 ms、dropped=37 / 48 / 39；
+joints=29、y=0.791614 m、reconnects=0 三次相同。判据 3500 有富余但不算宽，别当成常驻保证。
+
+丢帧来自服务端每客户端 1 格队列（发送协程被 16 ms 的物理 tick 挤占时丢旧帧），**不是客户端解析跟不上**：
+同机裸 `ws` 客户端 20 s 实测收 1183 帧、丢 13 帧，与服务端同期 1196 tick 的缺口对得上；
+服务端自身 tick 也只有 59.76 Hz（20.01 s 实测）。所以「60 s 无丢帧」这句话**不成立**，如实记在这里，
+要消掉得改服务端（把队列换成"合并最新"或把发送挪出物理 tick），不在 P0b 的范围。
+
 ## 设计（三层，各管一件事）
 
 | 层 | 位置 | 频率 | 职责 |

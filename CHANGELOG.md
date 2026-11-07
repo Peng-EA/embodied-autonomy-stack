@@ -17,6 +17,17 @@
   **没有步态、没有平衡**——命令速度不产生位移，`blocked` 恒为 true 是"想走走不动"而非撞墙。
   实测（n=1）：模型高 1.3222 m、30 s 漂移 0.0002 m、60.0 Hz、无 NaN；1.5 m 自由下落到 0.792 m 静止（8 接触点）。
 
+- **浏览器 G1 身体换成 WS 客户端（P0b）**：新增 `testbed/src/console/g1-body-ws.ts`——`Body` 的另一个实现，
+  契约（`BodyCommand`/`BodyState`/`Body`）一个字没改。main.ts 默认连 `ws://127.0.0.1:8788/sim`，
+  `?sim=wasm` 保留浏览器内 wasm 档；首连 1.5 s 超时、断线 1 s 起翻倍封顶 5 s 退避重连，
+  暴露 `degraded` 与 `onFallback`；断线时返回**最后一帧真实状态**而不是编数据（一帧都没到手时直接抛错）。
+  WS 失败且用户没强制 wasm 时降级 wasm，并在界面留一条 sys 事件。
+  新增 `testbed/scripts/probe-ws.mjs`（直接 import 上面那个 .ts，六项不达标 exit 1）。
+  本机 60 s 复跑三次（n=3）：frames=3558 / 3549 / 3558、p95_rtt=2.41 / 2.37 / 2.16 ms、dropped=37 / 48 / 39；
+  joints=29、y=0.791614 m、reconnects=0 三次相同。
+  边界照旧：仍无步态（cmd 不产生位移、`blocked` 恒 true）；这一档**没有网格**（几何仍来自 wasm，P0c 再接）；
+  服务端每客户端 1 格队列导致约 1% 丢帧，所以「60 s 无丢帧」**不成立**——写进 `docs/testbed.md`。
+
 - **双身体契约 + G1（MuJoCo 29-DOF）进演示台**（`testbed/src/console/`）：
   `body.ts` 定义 `BodyCommand` / `BodyState` / `Body`，胶囊（Rapier）与 G1（MuJoCo WASM）实现同一份接口；
   L1 内感受 / L3 调制 / L4 规划 / 遥测 / 遇障判定只读 `BodyState`。右上角「身体」按钮现场切换，

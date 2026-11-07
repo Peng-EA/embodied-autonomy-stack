@@ -12,6 +12,7 @@ import { RoomPhysics } from './physics.ts';
 import type { Body } from './body.ts';
 import { CapsuleBody } from './capsule-body.ts';
 import { G1Body } from './g1-body.ts';
+import { G1BodyWs } from './g1-body-ws.ts';
 import { G1View } from './g1-view.ts';
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -308,9 +309,12 @@ const reflex = { until: 0, vx: 0, vz: 0, cooldown: 0, count: 0 };
 // 换身体只换实现，L1–L4、遥测、反射判定一行不改。
 // 默认 G1；模型没装（或显式 ?body=capsule）时退回胶囊。
 const MJ_BASE = (import.meta as any).env?.BASE_URL + 'mujoco/';
+// 默认后端是 WS（sim_server 权威环）；?sim=wasm 走浏览器内 wasm 那一档
+const SIM_WS = 'ws://127.0.0.1:8788/sim';
 let body: Body | null = null;
 let capsule: CapsuleBody | null = null;
 let g1: G1Body | null = null;
+let g1ws: G1BodyWs | null = null;
 let g1view: G1View | null = null;
 let bodyKind: 'capsule' | 'g1' = 'capsule';
 let blockedFrames = 0;
@@ -610,37 +614,57 @@ function markBody(): void {
   const btn = $('btn-body') as HTMLButtonElement | null;
   if (btn) btn.textContent = bodyKind === 'g1' ? '身体：G1 人形' : '身体：鲸鱼娘';
   if (g1view) g1view.group.visible = bodyKind === 'g1';
-  char.visible = bodyKind !== 'g1';
+  // WS 后端还没有网格（几何搬服务端是 P0c）：G1 档先用占位角色当可见体，否则屏幕上空着
+  char.visible = bodyKind !== 'g1' || !g1view;
+}
+
+/** G1 后端只在这一处选：默认 WS（sim_server 权威环），?sim=wasm 保留浏览器内 wasm 档。 */
+async function openG1(): Promise<void> {
+  const forceWasm = new URLSearchParams(location.search).get('sim') === 'wasm';
+  if (!forceWasm) {
+    setAction('连接 sim_server…');
+    try {
+      g1ws = await G1BodyWs.create(SIM_WS, {
+        onFallback: (why) => pushLog('sys', 'sim_server 掉线未恢复：' + why + ' → degraded（停在最后一帧真实状态，不编数据）'),
+      });
+      (window as any).__g1ws = g1ws;
+      pushLog('sys', 'WS 身体就绪 · ' + SIM_WS + ' · ' + g1ws.jointNames.length + ' 关节 · 状态来自 Python 权威环（60 Hz）');
+      pushLog('sys', '这一档没有网格：G1 模型仍由 wasm 提供，想看模型加 ?sim=wasm（几何搬服务端是 P0c）');
+      return;
+    } catch (e) {
+      pushLog('sys', 'WS 连接失败：' + (e as Error).message + ' → 降级浏览器内 wasm');
+    }
+  }
+  setAction('加载 G1 模型…');
+  try {
+    g1 = await G1Body.create(MJ_BASE, (d, t, what) => {
+      if (d === 0 || d === t || d % 8 === 0) setAction('G1 网格 ' + d + '/' + t + ' · ' + what.replace('.STL', ''));
+    });
+    g1view = G1View.build(g1.parts, g1.meshes);
+    scene.add(g1view.group);
+    const h = g1view.calibrate(g1.pose());
+    (window as any).__g1view = g1view;
+    (window as any).__g1 = g1;
+    (window as any).__char = char;
+    (window as any).THREE = THREE;
+    (window as any).__camera = camera;
+    pushLog('sys', 'MuJoCo 就绪 · G1-29DOF · nq=' + g1.info.nq + ' nu=' + g1.info.nu + ' · 高 ' + h.toFixed(2) + ' m · ' + Math.round(g1view.triangleCount / 1000) + 'k 三角');
+  } catch (e) {
+    pushLog('sys', 'G1 加载失败：' + (e as Error).message);
+    console.error('[G1]', (e as Error).stack ?? e);
+    pushLog('sys', '先跑 node scripts/fetch-mujoco.mjs（模型不进仓库）');
+    setAction('待机');
+  }
 }
 
 async function useBody(kind: 'capsule' | 'g1'): Promise<void> {
   if (bodyKind === kind && body) return;
   if (kind === 'g1') {
-    if (!g1) {
-      setAction('加载 G1 模型…');
-      try {
-        g1 = await G1Body.create(MJ_BASE, (d, t, what) => {
-          if (d === 0 || d === t || d % 8 === 0) setAction('G1 网格 ' + d + '/' + t + ' · ' + what.replace('.STL', ''));
-        });
-        g1view = G1View.build(g1.parts, g1.meshes);
-        scene.add(g1view.group);
-        const h = g1view.calibrate(g1.pose());
-        (window as any).__g1view = g1view;
-        (window as any).__g1 = g1;
-        (window as any).__char = char;
-        (window as any).THREE = THREE;
-        (window as any).__camera = camera;
-        pushLog('sys', 'MuJoCo 就绪 · G1-29DOF · nq=' + g1.info.nq + ' nu=' + g1.info.nu + ' · 高 ' + h.toFixed(2) + ' m · ' + Math.round(g1view.triangleCount / 1000) + 'k 三角');
-      } catch (e) {
-        pushLog('sys', 'G1 加载失败：' + (e as Error).message);
-        console.error('[G1]', (e as Error).stack ?? e);
-        pushLog('sys', '先跑 node scripts/fetch-mujoco.mjs（模型不进仓库）');
-        setAction('待机');
-        return;
-      }
-    }
-    g1.reset(char.position.x, char.position.z);
-    body = g1;
+    if (!g1 && !g1ws) await openG1();
+    const backend: Body | null = g1ws ?? g1;
+    if (!backend) return; // 两条都没起来（openG1 已把原因写进 sys 日志），交给调用方退回胶囊
+    backend.reset(char.position.x, char.position.z);
+    body = backend;
     bodyKind = 'g1';
   } else {
     if (!capsule) capsule = new CapsuleBody(await RoomPhysics.create());
@@ -650,7 +674,7 @@ async function useBody(kind: 'capsule' | 'g1'): Promise<void> {
   }
   markBody();
   setAction('待机');
-  pushLog('sys', '身体切换 → ' + (kind === 'g1' ? 'G1（MuJoCo，29 关节）' : '胶囊（Rapier，锁旋转）'));
+  pushLog('sys', '身体切换 → ' + (kind === 'g1' ? (g1ws ? 'G1（sim_server WS，29 关节）' : 'G1（MuJoCo wasm，29 关节）') : '胶囊（Rapier，锁旋转）'));
 }
 
 // ---------------------------------------------------------------- 循环
