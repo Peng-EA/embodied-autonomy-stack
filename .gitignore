@@ -55,5 +55,11 @@ checks/node_modules/
 # 本机临时目录（pip / esbuild 用；本机 Temp 不可用时指向工作区）
 .tmp/
 
+# 第三方机器人模型（MuJoCo menagerie / unitree_ros 等），按需下载，不进仓库
+.assets/
+
+# MuJoCo 模型 + wasm（30 MB）：node testbed/scripts/fetch-mujoco.mjs 生成
+testbed/public/mujoco/
+
 # pip 临时目录（本机 Temp 不可用时会落在仓库根）
 pip-*/

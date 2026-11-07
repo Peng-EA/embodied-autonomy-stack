@@ -43,7 +43,42 @@ npm test           # 确定性 / 过期策略 / 区间估计
 | 物理 | **Rapier 胶囊**已接进 console：角色是动态胶囊（锁旋转），家具是静态碰撞体；骨骼只是"跟着胶囊的视觉体" |
 | 动作 | 5 个：走 / 坐 / 拿 / 喝水 / 被吓；都是关节角度覆盖，不给力矩 |
 | L3 → L4 | 情绪已进请求体（fear/curiosity/fatigue），服务端按"累了先休息、怕了先退、好奇去看看"改选择；**不改安全判定** |
-| 与物理栈的接线 | `console.html` 与 `index.html` 仍是两条线；Rapier 只在 console 里 |
+| 与物理栈的接线 | `console.html` 与 `index.html` 仍是两条线；物理后端可在 console 里切换（见下） |
+
+### 双身体：胶囊 ↔ G1（同一个 `Body` 合同）
+
+演示台现在有两个"身体"，走同一份输入/输出，右上角按钮现场切换：
+
+| | 胶囊 · Rapier | G1 · MuJoCo 29-DOF |
+|---|---|---|
+| 实现 | `capsule-body.ts` | `g1-body.ts`（官方 `@mujoco/mujoco` WASM 4.0.0） |
+| 维度 | 1 个刚体（锁旋转） | qpos 36 / qvel 35 / 执行器 29 / geom 72 |
+| 位姿来源 | Rapier 积分 | MuJoCo `mj_step`（2 ms 子步） |
+| 底盘 | 速度驱动 | 速度**注入**（每步写 qvel[0:2]），朝向每步钉死——等价于锁旋转 |
+| 关节 | 无 | 29 个位置执行器保持 `stand` 关键帧 |
+| 渲染 | GLB/PMX + 骨骼 | 模型自带 `mesh_vert`/`mesh_face`，按 `geom_xpos`/`geom_xmat` 逐件摆放 |
+| 初装体积 | 0 | 30 MB（`public/mujoco/`，不进仓库）+ wasm 2.8 MB gzip |
+
+合同在 `src/console/body.ts`：`BodyCommand{vx,vz,yaw}` 进、`BodyState{t,x,y,z,yaw,speed,blocked,joints}` 出。
+L1 内感受、L3 调制、L4 规划、遥测、遇障判定**只认 `BodyState`**，换身体不改上层代码。
+
+演示台拿到的是同一份数字：G1 实测模型高 **1.34 m**、393k 三角面、加载约 1 s（本机 Edge headless）。
+
+用法与边界：
+
+```bash
+node scripts/fetch-mujoco.mjs     # 从 .assets/g1 复制模型 + wasm 到 public/mujoco/
+npm run dev                       # 打开 console.html，右上角「身体」按钮切换
+# console.html?body=capsule       # 强制用胶囊（没有 30 MB 模型时自动退回这一档）
+```
+
+- **能动，但只是"滑行"**：底盘速度是注入的，腿保持站立姿势——没有步态、没有平衡控制器。
+  这是刻意的：先把 L4→身体的通路打通，再谈走路。
+- **关节通道已通但还没被 L4 使用**：`G1Body.setJoint(name, rad)` 可以直接给目标角，
+  接 IK 之后「去水杯那儿喝一口」才会变成 29 维目标角序列。
+- **场景是简化的**：MuJoCo 里只有地板 + 四面墙的包围盒；家具碰撞仍在 Rapier 那侧，
+  两套几何暂时没有互相同步（这是下一步，不是已完成）。
+- 模型许可：MuJoCo menagerie `unitree_g1`，BSD-3-Clause（派生自 `unitree_ros` 的 `g1_29dof_rev_1_0.xml`）。
 
 模型的分发边界见 `testbed/public/models/README.md`：
 

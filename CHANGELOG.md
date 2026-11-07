@@ -11,6 +11,17 @@
 
 ### Added
 
+- **双身体契约 + G1（MuJoCo 29-DOF）进演示台**（`testbed/src/console/`）：
+  `body.ts` 定义 `BodyCommand` / `BodyState` / `Body`，胶囊（Rapier）与 G1（MuJoCo WASM）实现同一份接口；
+  L1 内感受 / L3 调制 / L4 规划 / 遥测 / 遇障判定只读 `BodyState`。右上角「身体」按钮现场切换，
+  `?body=capsule` 强制胶囊，模型缺失时自动退回。
+  - G1 侧：官方 `@mujoco/mujoco` 4.0.0（wasm 2.8 MB gzip），qpos 36 / nv 35 / nu 29，2 ms 子步，
+    底盘速度注入 + 朝向钉死，29 个位置执行器保持 `stand`；渲染直接用模型自带 `mesh_vert/mesh_face` 与
+    `geom_xpos/geom_xmat`（另读 STL 会把 `mesh_pos` 偏移算两遍，头会浮在身子上方 0.4 m）。
+  - `testbed/scripts/fetch-mujoco.mjs`：模型与 wasm 落到 `public/mujoco/`（30 MB，`.gitignore` 排除），
+    并生成 `manifest.json`（MuJoCo 的 mesh 名去扩展名且与文件名不同，如 `waist_yaw_link` → `waist_yaw_link_rev_1_0.STL`）。
+  - 实测（本机 Edge headless）：模型高 1.34 m、393k 三角面、加载约 1 s，站立 6 s 不摔；
+    底盘可被 L4 的 `goto` 推着走（1.9 m ≈ 5 s）。**没有步态、没有平衡控制**——写进 `docs/testbed.md`。
 - **双模型闭环探针**（`sim/test_vla_l4.py` + `sim/vla/`）：L2 动作块（可换后端）+ L4 Ollama
   语义规划（JSON Schema 约束）+ 100 Hz 物理环，物理不被推理阻塞。
   - 六个场景 A–F 与六类指标 M1–M6；跨机（`--l4-url`）与断网（`--fault remote-down`）可复现。

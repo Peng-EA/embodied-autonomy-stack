@@ -9,6 +9,10 @@ import { Vitals } from './vitals.ts';
 import { Planner, STALE_AGE_MS } from './plan.ts';
 import { Affect } from './affect.ts';
 import { RoomPhysics } from './physics.ts';
+import type { Body } from './body.ts';
+import { CapsuleBody } from './capsule-body.ts';
+import { G1Body } from './g1-body.ts';
+import { G1View } from './g1-view.ts';
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -85,8 +89,8 @@ scene.add(plant);
 const char = new THREE.Group();
 const skin = mat(0xf9ddca), cloth = mat(0x2b2f3a), hair = mat(0xded8e8), accent = mat(0x8b7bd8);
 
-const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 0.42, 6, 16), cloth);
-body.position.y = 0.86; body.castShadow = true; char.add(body);
+const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 0.42, 6, 16), cloth);
+torso.position.y = 0.86; torso.castShadow = true; char.add(torso);
 
 const skirt = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.34, 20), cloth);
 skirt.position.y = 0.55; skirt.castShadow = true; char.add(skirt);
@@ -299,13 +303,16 @@ window.addEventListener('pointermove', (e) => {
 
 const reflex = { until: 0, vx: 0, vz: 0, cooldown: 0, count: 0 };
 
-// Rapier：只有一个胶囊 + 静态家具。角色网格只是"跟着胶囊的视觉体"。
-let room: RoomPhysics | null = null;
-RoomPhysics.create().then((r) => {
-  room = r;
-  r.setPos(char.position.x, char.position.z);
-  pushLog('sys', 'Rapier 就绪 · 胶囊 ' + r.constructor.name);
-});
+// ---------------------------------------------------------------- 身体后端
+// 胶囊（Rapier）与 G1（MuJoCo）走同一份 BodyCommand / BodyState：
+// 换身体只换实现，L1–L4、遥测、反射判定一行不改。
+// 默认 G1；模型没装（或显式 ?body=capsule）时退回胶囊。
+const MJ_BASE = (import.meta as any).env?.BASE_URL + 'mujoco/';
+let body: Body | null = null;
+let capsule: CapsuleBody | null = null;
+let g1: G1Body | null = null;
+let g1view: G1View | null = null;
+let bodyKind: 'capsule' | 'g1' = 'capsule';
 let blockedFrames = 0;
 let lastActAt = -99;
 
@@ -598,14 +605,64 @@ setInterval(async () => {
 
 setInterval(sample, 120);
 
+// ---------------------------------------------------------------- 切身体
+function markBody(): void {
+  const btn = $('btn-body') as HTMLButtonElement | null;
+  if (btn) btn.textContent = bodyKind === 'g1' ? '身体：G1 人形' : '身体：鲸鱼娘';
+  if (g1view) g1view.group.visible = bodyKind === 'g1';
+  char.visible = bodyKind !== 'g1';
+}
+
+async function useBody(kind: 'capsule' | 'g1'): Promise<void> {
+  if (bodyKind === kind && body) return;
+  if (kind === 'g1') {
+    if (!g1) {
+      setAction('加载 G1 模型…');
+      try {
+        g1 = await G1Body.create(MJ_BASE, (d, t, what) => {
+          if (d === 0 || d === t || d % 8 === 0) setAction('G1 网格 ' + d + '/' + t + ' · ' + what.replace('.STL', ''));
+        });
+        g1view = G1View.build(g1.parts, g1.meshes);
+        scene.add(g1view.group);
+        const h = g1view.calibrate(g1.pose());
+        (window as any).__g1view = g1view;
+        (window as any).__g1 = g1;
+        (window as any).__char = char;
+        (window as any).THREE = THREE;
+        (window as any).__camera = camera;
+        pushLog('sys', 'MuJoCo 就绪 · G1-29DOF · nq=' + g1.info.nq + ' nu=' + g1.info.nu + ' · 高 ' + h.toFixed(2) + ' m · ' + Math.round(g1view.triangleCount / 1000) + 'k 三角');
+      } catch (e) {
+        pushLog('sys', 'G1 加载失败：' + (e as Error).message);
+        console.error('[G1]', (e as Error).stack ?? e);
+        pushLog('sys', '先跑 node scripts/fetch-mujoco.mjs（模型不进仓库）');
+        setAction('待机');
+        return;
+      }
+    }
+    g1.reset(char.position.x, char.position.z);
+    body = g1;
+    bodyKind = 'g1';
+  } else {
+    if (!capsule) capsule = new CapsuleBody(await RoomPhysics.create());
+    capsule.reset(char.position.x, char.position.z);
+    body = capsule;
+    bodyKind = 'capsule';
+  }
+  markBody();
+  setAction('待机');
+  pushLog('sys', '身体切换 → ' + (kind === 'g1' ? 'G1（MuJoCo，29 关节）' : '胶囊（Rapier，锁旋转）'));
+}
+
 // ---------------------------------------------------------------- 循环
 let paused = false;
 $('btn-pause').onclick = () => {
   paused = !paused;
   ($('btn-pause') as HTMLButtonElement).textContent = paused ? '继续' : '暂停';
 };
+$('btn-body').onclick = () => void useBody(bodyKind === 'g1' ? 'capsule' : 'g1');
 $('btn-reset').onclick = () => {
   char.position.set(0, 0, 0.4);
+  if (body) body.reset(0, 0.4);
   mode = 'idle';
   target = null;
   setAction('待机');
@@ -740,17 +797,14 @@ function animate() {
     }
   }
 
-  if (room) {
-    const before = room.pos();
-    room.step(vx, vz);
-    const after = room.pos();
-    char.position.x = after.x;
-    char.position.z = after.z;
+  // 同一份指令，两个身体：谁在跑由 bodyKind 决定
+  if (body) {
+    const st = body.step(dt, { vx, vz, yaw: char.rotation.y - yawOffset });
+    char.position.x = st.x;
+    char.position.z = st.z;
 
     // "撞上了"= 想要的速度没兑现。这是物理给的真信号，不是包围盒猜的。
-    const want = Math.hypot(vx, vz) * dt;
-    const got = Math.hypot(after.x - before.x, after.z - before.z);
-    if (want > 0.002 && got < want * 0.35 && elapsed > reflex.cooldown) {
+    if (st.blocked && elapsed > reflex.cooldown) {
       blockedFrames++;
       if (blockedFrames > 6) {
         blockedFrames = 0;
@@ -769,6 +823,8 @@ function animate() {
     } else {
       blockedFrames = 0;
     }
+
+    if (bodyKind === 'g1' && g1 && g1view) g1view.sync(g1.pose());
   } else {
     char.position.x += vx * dt;
     char.position.z += vz * dt;
@@ -844,6 +900,7 @@ setInterval(() => {
 
 (window as any).__setYaw = (v: number) => { char.rotation.y = v; yawOffset = v; };
 (window as any).__state = () => ({
+  body: bodyKind,
   rot: Math.round(char.rotation.y * 100) / 100,
   mode,
   hasTarget: !!target,
@@ -854,6 +911,13 @@ setInterval(() => {
 
 resize();
 animate();
+
+// 默认跑 G1；模型没装（或 ?body=capsule）就退回胶囊——两条都算"能跑"
+(async () => {
+  const want = new URLSearchParams(location.search).get('body');
+  if (want !== 'capsule') await useBody('g1');
+  if (!body) await useBody('capsule');
+})();
 pushLog('bot', '准备好了。说个地方，我走过去；或者说「挥挥手」。');
 
 // 演示/截图用：?auto=walk 会在模型加载后自己走向桌边
