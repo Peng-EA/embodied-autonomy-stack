@@ -14,23 +14,23 @@
   （n 不变，没必要 60 Hz 重复）。
 - contacts 是 data.ncon（活跃接触点数）。
 - mode 是 **P2b 追加的键**（body.ts 的契约字段一个没动）：HOLD = pose hold 站住，
-  POLICY = G1 joystick 策略在走。判据/滞回/ramp 全在 modes.py，这里只透传。
+  POLICY = G1 joystick 策略在走。判据/滞回/ramp 全在 sim/env/g1_modes.py，这里只透传。
 - 连接后先发一条 full 消息（含 geom.names），之后每 tick 一条。
 
 P2b 之后 cmd 会产生运动了，但**两段是两套机构**：cmd 静止 → HOLD（kp=500 保位），
 cmd 有速度 → POLICY（kp=75 的策略）。所以「站着」永远是 HOLD 干的，
 不许把它算成策略的能力（策略零命令 5 s 漂 0.387 m，见 policies/SPIKE.md §2）。
 
-P2a 追加第三段 **MIMIC**（modes.py 的第三套机构，动作源 = 别人训的 ONNX，
-HF exptech/g1-moves，CC-BY-4.0，见 policies/g1_mimic.py）：
+P2a 追加第三段 **MIMIC**（sim/env/g1_modes.py 的第三套机构，动作源 = 别人训的 ONNX，
+HF exptech/g1-moves，CC-BY-4.0，见 sim/env/g1_mimic.py）：
 - 客户端发 {"mimic":"play"} → 先在 HOLD 站定 0.5 s，ramp 0.6 s 进片头，然后 50 Hz 播完整段，
   播完自动 ramp 回 HOLD；送 {"mimic":"stop"} 或给速度命令都会提前退场（同一套 ramp）。
 - 它不是走路：MIMIC 与 POLICY 互斥，cmd 有速度时 MIMIC 让路、退回 HOLD 再交棒。
 
-P3 追加第四段 **IK**（mink 解右腕到 scene.json 的 ik_targets，见 sim_server/ik.py）：
+P3 追加第四段 **IK**（mink 解右腕到 scene.json 的 ik_targets，见 sim/env/g1_ik.py）：
 - 客户端发 {"ik":"play"} → 先在 HOLD 站定 0.1 s → mink 解（预算 2 s，收敛即停）→ 交位置执行器
   （PoseHold，kp=500 不动）→ 闭环保持 1 s → ramp 回 HOLD；{"ik":"stop"} 或速度命令提前退场。
-- IK 与 POLICY / MIMIC 三者**互斥**：同一时刻只有一套机构写关节（判据/ramp 全在 modes.py）。
+- IK 与 POLICY / MIMIC 三者**互斥**：同一时刻只有一套机构写关节（判据/ramp 全在 sim/env/g1_modes.py）。
 - "ik" 只在 HOLD 起手；POLICY 在跑时请求会排队，回 HOLD 后若又有速度命令则命令优先。
 
 跑法（仓库根目录，端口默认 8788，server 的 L4 服务占 8787）：
@@ -50,7 +50,7 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-from .modes import ModeController
+from sim.env.g1_modes import ModeController
 from sim.env.g1_sim import PoseHold, STEPS_PER_TICK, TICK_HZ, World
 
 DEFAULT_HOST = "127.0.0.1"
@@ -67,7 +67,7 @@ class SimRuntime:
     def __init__(self, xml_path: str | None = None, tick_hz: float = TICK_HZ) -> None:
         self.world = World(xml_path)
         self.hold = PoseHold(self.world)
-        # HOLD / POLICY 状态机（modes.py）：所有 ctrl 都从这里出，物理环本身不管模式
+        # HOLD / POLICY 状态机（sim/env/g1_modes.py）：所有 ctrl 都从这里出，物理环本身不管模式
         self.mode = ModeController(self.world, self.hold)
         self.tick_hz = float(tick_hz)
         self.cmd: dict[str, float] = {"vx": 0.0, "vz": 0.0, "yaw": 0.0}
@@ -140,7 +140,7 @@ class SimRuntime:
             else:
                 self.last_error = "ik must be 'play' or 'stop'"
 
-        # 注意：jointTargets 只在 HOLD 生效；POLICY 的目标归网络（modes.py 里说明）
+        # 注意：jointTargets 只在 HOLD 生效；POLICY 的目标归网络（sim/env/g1_modes.py 里说明）
 
     # ---------- 每 tick ----------
 

@@ -383,7 +383,8 @@ Python 侧不另写一遍力矩。
 | `selfcheck.py` | headless 跑 N 秒，打印四行指标（`--walk` 打 P2b 六项 / `--mimic` 七项 / `--ik` 五项），exit code 0/1 |
 | `ik.py` | **IK 的解算封装**：`mink.Configuration` + `FrameTask(right_wrist_yaw_link)` + `PostureTask`（回 stand）、等约束冻基座/腿、`frame→关节角`、`actuator_targets`（按关节名映射，不按下标猜）。**不自研 IK** |
 | `sim/env/scene_room.py` | 读场景单一真源 **`sim/env/scene_room.json`**（`boxes` = physics.ts，parity 脚本逐条比 + **P3 的 `ik_targets`**，坐标写 stored 系），做 stored→mj 换算；默认路径由 `__file__` 推出仓库根（不看 cwd），显式 `load_scene(path=...)` 仍可换一份 |
-| `modes.py` | **HOLD/POLICY 状态机**：滞回判据、0.2 s ramp（目标 + kp + kd）、回 HOLD 前的刹车；所有 `ctrl` 都从这里出 |
+| `sim/env/g1_modes.py` | **HOLD/POLICY/MIMIC/IK 状态机**：滞回判据、0.2 s ramp（目标 + kp + kd）、回 HOLD 前的刹车；所有 `ctrl` 都从这里出。2026-11-08 从本目录搬到 `sim/` 底座（连 `g1_ik` / `g1_mimic` 一起），本包只调它，**不持副本** |
+| `sim/env/g1_world.py` | **G1 身体**：把状态机 + 真物理包成 `sim` 认的 `World` 接口（`pos/speed/step/drive_toward/brake/sense_clearance/contact_force/clone`）。本目录的 `app.py`/`selfcheck.py` 仍直连 `g1_sim`（需要 mode 细节与控制帧），**两条路径共用同一份内核** |
 | ~~`policies/g1_joystick.py`~~ | 已并入 `sim/env/g1_sim.py` 的 G1JoystickPolicy：103 维 obs 组装（照训练端）、50 Hz 控制、动作→29 个位置目标、权重 md5 校验 |
 | `policies/g1_mimic.py` | **MIMIC 的动作源**：`CLIPS` 注册表（clip / 字节数 / sha256 / 帧数）、154 维 obs 组装、每控制帧两调推理、参考帧数二分探出、动作→29 个位置目标 |
 | `policies/SPIKE.md` | 2026-11-07 的选型探路记录：为什么是这个权重、kp=500 必摔、零命令站不住（含实测表） |

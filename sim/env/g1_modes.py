@@ -1,5 +1,11 @@
 """HOLD ↔ POLICY 模式状态机 —— P2b。
 
+2026-11-08（S1b 纯搬家）：本文件从 `sim_server/modes.py` 逐行搬来，判据/ramp/相位一个数没改，
+只把 import 换成包内路径（`.g1_ik` / `.g1_mimic` / `.g1_sim`）。为什么要搬：人形身体
+（`sim/env/g1_world.py`）要用同一套控制状态机，而 `sim/` 是底座、不许 import `sim_server`
+（`node scripts/check-layer-deps.mjs` 机械守着）。所以搬的是**这套状态机**本身，
+不是"再抄一份"——两份状态机迟早会分叉，那比没有更糟。
+
 两个模式各自只干一件事，谁都不许冒充对方：
 
 - **HOLD**   pose hold（sim/env/g1_sim.py）：29 个位置执行器钉在 keyframe `stand`，kp=500 临界阻尼。
@@ -127,9 +133,9 @@ from typing import Any, Callable, Mapping
 import mujoco
 import numpy as np
 
-from .ik import RIGHT_ARM_JOINTS, IkSolver, actuator_targets, frame_point_mj
-from .policies.g1_mimic import G1MimicPolicy
-from sim.env.g1_sim import CTRL_SUBSTEPS, POLICY_KD, POLICY_KP, G1JoystickPolicy, PoseHold
+from .g1_ik import RIGHT_ARM_JOINTS, IkSolver, actuator_targets, frame_point_mj
+from .g1_mimic import G1MimicPolicy
+from .g1_sim import CTRL_SUBSTEPS, POLICY_KD, POLICY_KP, G1JoystickPolicy, PoseHold
 
 HOLD = "HOLD"
 POLICY = "POLICY"

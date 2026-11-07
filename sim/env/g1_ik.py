@@ -1,5 +1,9 @@
 """P3 · IK：右腕到 scene.json 的取杯点 —— **解算全交给 mink**，本文件不自研 IK。
 
+2026-11-08（S1b 纯搬家）：从 `sim_server/ik.py` 逐行搬来，只改 import 路径。
+搬它的原因不是"想搬"，而是 `g1_modes.ModeController` 的 IK 相位要用它，而 `g1_modes` 必须待在
+`sim/env/`（人形身体要用同一套状态机，`sim/` 不许 import `sim_server`）。
+
 红线（与 docs/plan-g1-gait-ik-collision.md 的 P3 一节对齐）：
 
 - 不写阻尼最小二乘、不手写雅可比。解算只有一条路：`mink.solve_ik`（QP 形式差分 IK，
@@ -39,8 +43,8 @@ import numpy as np
 
 import mink
 
-from sim.env.g1_sim import PoseHold, World
-from sim.env.scene_room import IkTarget
+from .g1_sim import PoseHold, World
+from .scene_room import IkTarget
 
 # ---- 任务定义（任务书：FrameTask(right_wrist_yaw_link) + PostureTask 回 stand）----
 IK_FRAME = "right_wrist_yaw_link"

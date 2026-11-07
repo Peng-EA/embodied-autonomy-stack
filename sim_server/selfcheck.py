@@ -21,12 +21,12 @@
      输出：frames= / duration_s= / joint_out_of_limit= / z_min= / fell= / return_to_hold_s=
            / infer_p95_ms=
    达标（任务书原文）：关节 0 超限；不摔（z_min>0.5）；播完 ≤2 s 回 HOLD。
-   clip 用 --mimic-clip 指定（注册表见 policies/g1_mimic.py 的 CLIPS）：
+   clip 用 --mimic-clip 指定（注册表见 sim/env/g1_mimic.py 的 CLIPS）：
    **默认 bonus/B_HandsUp**（441 帧，七项全绿）；dance/J_Dance0_StepTouch 保留为显式选项，
    **它会如实报 1 处越限**（负结果，见 sim_server/README.md §4c）。
    --mimic-candidates 逐段跑注册表并打候选表，是同一套判据的批量版。
    这段跑的是**动作**不是走路：参考动作按 mjlab 的节奏（每控制步 +1 帧 = 50 帧/秒）播，
-   与数据集名义的 60 FPS 时长不同，这是照训练端取值，见 policies/g1_mimic.py 的 REF_FPS 注释。
+   与数据集名义的 60 FPS 时长不同，这是照训练端取值，见 sim/env/g1_mimic.py 的 REF_FPS 注释。
 
 4) P1 --collide：把 G1 摆在桌子正前方、面向桌子，cmd=(0.5,0,0) 走 8 s，量「真撞上」的信号
      server/.venv/Scripts/python.exe -m sim_server.selfcheck --collide --seconds 8
@@ -75,7 +75,7 @@ from typing import Any
 import mujoco
 import numpy as np
 
-from .modes import (
+from sim.env.g1_modes import (
     MOVE_LINVEL_ENTER,
     MOVE_LINVEL_EXIT,
     MOVE_YAW_ENTER,
@@ -578,7 +578,7 @@ def _mimic_episode(args: argparse.Namespace, clip: str | None) -> dict[str, Any]
     world = World(args.xml)
     hold = PoseHold(world)
     mode = ModeController(world, hold)
-    from .policies.g1_mimic import G1MimicPolicy as _M
+    from sim.env.g1_mimic import G1MimicPolicy as _M
     mode._mimic_factory = lambda w: _M(w, anchor_body=args.mimic_anchor, clip=clip)
     pol = mode.load_mimic()               # 缺权重 / 尺寸 / sha256 / 未知 clip，这里当场炸
     pinfo = pol.info()
@@ -735,11 +735,11 @@ def _run_mimic_candidates(args: argparse.Namespace) -> int:
     2 = 有 clip 权重/名字不对（当场打原因，不静默跳过）。
     表里出现 FAIL 不一定算错——dance 那段是**故意保留的负结果**（参考顶到硬限位）。
     """
-    from .policies.g1_mimic import CLIPS, DEFAULT_CLIP
+    from sim.env.g1_mimic import CLIPS, DEFAULT_CLIP
 
     print(
         f"candidates: {len(CLIPS)} 段已注册（权重在 .tmp/mimic/，字节数 + sha256 见 "
-        f"policies/g1_mimic.py 的 CLIPS）；默认 clip = {DEFAULT_CLIP}"
+        f"sim/env/g1_mimic.py 的 CLIPS）；默认 clip = {DEFAULT_CLIP}"
     )
     print(
         f"{'clip':26s} {'frames':>6s} {'dur_s':>7s} {'joint_out_of_limit':>18s} "
@@ -788,7 +788,7 @@ def _ik_episode(args: argparse.Namespace) -> dict[str, Any]:
     """
     import numpy as np
 
-    from .ik import IkSolver, frame_point_mj
+    from sim.env.g1_ik import IkSolver, frame_point_mj
 
     world = World(args.xml)
     hold = PoseHold(world)
@@ -1194,7 +1194,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--mimic-clip", default=None,
-        help="P2a 播哪一段（注册表见 policies/g1_mimic.py 的 CLIPS；默认 bonus/B_HandsUp，"
+        help="P2a 播哪一段（注册表见 sim/env/g1_mimic.py 的 CLIPS；默认 bonus/B_HandsUp，"
              "负结果选项 dance/J_Dance0_StepTouch）",
     )
     ap.add_argument(

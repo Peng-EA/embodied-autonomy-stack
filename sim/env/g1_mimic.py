@@ -88,6 +88,10 @@ command 切片要的是**同一帧**参考值，而它本身是 ONNX 的输出 �
 参考值按帧号缓存，同一帧只取一次。
 """
 
+# 2026-11-08（S1b 纯搬家）：从 sim_server/policies/g1_mimic.py 逐行搬来，只改 import 路径。
+# 原因同 g1_modes.py / g1_ik.py：ModeController 的 MIMIC 相位要用它，而状态机必须待在 sim/env/。
+# REPO_ROOT 仍按 parents[2] 推（sim/env/ 与 sim_server/policies/ 的深度相同），路径不变。
+
 from __future__ import annotations
 
 import hashlib

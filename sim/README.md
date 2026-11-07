@@ -53,6 +53,9 @@ sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈�
 | `env/world.py` | 仿真器包装：位姿/速度/**raycast 感知**/接触力；换真机只改这一层 |
 | `env/g1_sim.py` | **G1 人形内核（底座）**：MJCF 载入 + 2 ms 定步长、PoseHold（kp=500）、joystick ONNX 策略（103 obs / 50 Hz / kp=75）。2026-11-08 从 `sim_server/` 抽来，两边共用同一份（`sim_server` 依赖 `sim`，反之禁止） |
 | `env/scene_room.py` | 读 `env/scene_room.json` 并把 stored(y-up) 换成 MuJoCo(z-up)，只换一次 |
+| `env/g1_world.py` | **G1 身体**（2026-11-08）：实现 `world.py` 的同一份公开面（`pos/speed/step/reset/sense_clearance/contact_force/charger_distance/drive_toward/brake/clone`），底下是 `g1_sim` 的真物理 + `g1_modes` 的模式机。`python -m sim.env.g1_world --check` 是它的四段自检 |
+| `env/g1_modes.py` | HOLD/POLICY/MIMIC/IK 状态机（含 P5 的刹车三段式）。2026-11-08 从 `sim_server/` 搬到这（`g1_ik` / `g1_mimic` 一起搬，`sim_server` 改成 import）——**状态机只有这一份，不许复制** |
+| `env/g1_ik.py` · `env/g1_mimic.py` | `g1_modes` 的两个动作后端（mink IK / mimic ONNX），随状态机一起搬 |
 | `l1_homeostasis/` | 电量/温度/应力 → `homeostatic_broadcast`（20Hz 采样） |
 | `l2_reflex/` | 射线间隙/接触力 → `reflex_override`（迟滞 + 冷却），**无许可、直接置位** |
 | `l3_affect/` | 情绪向量 → `affect_vector`、`goal_candidate`，并**真的调制速度** |
@@ -62,6 +65,27 @@ sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈�
 | `contracts.py` | 与 `contracts/*.schema.json` 对应的数据结构 + JSONL 日志 |
 | `dashboard.py` | 终端面板（UTF-8 用框线，GBK 自动退成 ASCII 边框） |
 
+## G1 身体：等价的地方与不等价的地方
+
+`G1World` 让 L1–L4 不用改一行就跑到人形上（`python -m main --body g1`，S2 起）。但**底盘和人形不是一回事**，
+下面这些是接口凑齐了、语义没凑齐的地方，写在这里免得被当成"已经等价"：
+
+| # | 接口 | 底盘（`world.py`） | G1（`g1_world.py`） | 现状 |
+|---|---|---|---|---|
+| 1 | `drive_toward` 返回值 | 推力 N | 命令速度 m/s | L1–L4 都不读它，不构成回归；但**名字骗人** |
+| 2 | `push`（L2 否决时的反推力） | 真的施力 | **忽略**，只记 `push_ignored` 计数 | 人形没有"推底盘"这个动作；正路是让 L2 否决走速度层 |
+| 3 | `charger_distance` | 场景里有充电桩 | 房间没有桩，只有地面距离 | L1 的 `charging` 在本场景**无物理对应** |
+| 4 | `clearance_analytic` | 只对那道墙成立 | 改成房间 AABB 精确最小距离 | 同义、对象不同；兼作 12 射线对照（实测 raycast 只会低估） |
+| 5 | 朝向 | 车体没有朝向自由度 | 有 | 加了有死区的 yaw 助力（`@own` + TBD）；**这处是人形新增行为**，可删 |
+| 6 | 射线高度 | 0.11 m | 单高度 **0.30 m**（`@own` + TBD） | 桌面上的、悬空的、低于 0.30 m 的障碍都看不见；真机换激光 |
+| 7 | `clone` | 拷 data | 拷 data、共享 model | ramp 写增益会串到原世界，已做"克隆前快照 + 原世界下一步复位"（自检 500→245→500） |
+
+**四段自检（2026-11-08 · n=1 · `python -m sim.env.g1_world --check`）**：走 5 s → 0.5520 m/s、`z_min` 0.7262、不摔；
+朝桌走 → `clearance` 2.13 s 跌破 0.22 m 告警线（射线 0.2154 / 解析 0.2154）；`brake()` → 0.84 s 回 HOLD、末速 0.083 m/s；
+`contact_force` → 空地 0.0 N / 压桌 306.10 N；`clone` → data 隔离。三条自洽（pos↔speed 差 2.4%、方向夹角 2.7°、接触力两口径一致）。
+
+**已知场景事实（S1c 处理）**：默认出生点 `(0,-0.40)` 离边几角 0.273 m，起步 `clearance` 就只有 0.127 m < 0.22 告警线，
+所以 L2 会从 t=0 触发。这是出生点选得不好，不是阈值问题。
 ## 基线：full 是主张，四条 yaml 是消融
 
 `sim` 的开关**从 `evals/baselines/*.yaml` 读**（`sim/baseline.py`），代码里不再另抄一份。
