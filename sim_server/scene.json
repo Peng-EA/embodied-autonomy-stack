@@ -1,0 +1,35 @@
+{
+  "meta": {
+    "version": 1,
+    "unit": "m",
+    "single_source": "testbed/src/console/physics.ts :: RoomPhysics.create() 的 fixed(...) 与 CAPSULE_*",
+    "checked_by": "node scripts/check-scene-parity.mjs（逐条比对，不一致 exit 1）",
+    "frames": {
+      "stored": "physics.ts / Rapier / three：x 向右、y 向上、z 指向屏幕外（角色朝 -z 走）。本文件 center/half 全部在这个系里，与 physics.ts 源码逐个数字相同。",
+      "mujoco": "z-up：p_mj = (x, -z, y)，half_mj = (hx, hz, hy)。换算只在 sim_server/scene.py 做一次，别在别处再算一遍。"
+    },
+    "what": "只搬 physics.ts 里固定的家具/结构体的名字 + 中心 + 半长。数值不许在这里改：改 physics.ts，再同步这里，然后跑 parity 脚本。",
+    "not_in_scope": "摩擦/材质/颜色不在本文件口径内（physics.ts 的 fixed() 统一 setFriction(0.6)，MuJoCo 侧暂用模型默认值，P1b 对齐 Rapier 时再收口）。"
+  },
+  "agent": {
+    "note": "physics.ts 的 CAPSULE_R / CAPSULE_HALF（Rapier 的球形胶囊代理）。MuJoCo 侧用 g1.xml 自己的 mesh 碰撞体，这里只作跨引擎口径与 parity 校验。",
+    "capsule_r": 0.22,
+    "capsule_half": 0.5,
+    "spawn": {
+      "x": 0,
+      "z": 0.4,
+      "note": "physics.ts 的 RigidBodyDesc.dynamic().setTranslation(0, CAPSULE_HALF + CAPSULE_R + 0.02, 0.4)：水平起点（x, z_three）搬过来；竖直起点不搬（用 g1.xml keyframe stand 的 0.79），那是 MJCF 自己的事。"
+    }
+  },
+  "boxes": [
+    { "id": "floor", "label": "地板", "kind": "structure", "center": [0, -0.05, 0], "half": [8, 0.05, 8], "collider": "plane", "note": "physics.ts 是 16×16 的静态盒子；MuJoCo 用无限平面 z=0（= 盒子顶面 center.y+half.y），与 room.xml/scene.xml 的 floor 一致，P0a 判据的前提不变。" },
+    { "id": "wall_back", "label": "后墙", "kind": "structure", "center": [0, 1.6, -4.06], "half": [4, 1.6, 0.06] },
+    { "id": "wall_left", "label": "左墙", "kind": "structure", "center": [-4.06, 1.6, 0], "half": [0.06, 1.6, 4] },
+    { "id": "desk", "label": "桌", "kind": "furniture", "center": [1.7, 0.36, -2.4], "half": [0.75, 0.36, 0.35] },
+    { "id": "bed", "label": "床", "kind": "furniture", "center": [-2.4, 0.22, 1.4], "half": [0.8, 0.22, 1] },
+    { "id": "stool", "label": "凳", "kind": "furniture", "center": [-1.9, 0.25, -1], "half": [0.25, 0.25, 0.25] },
+    { "id": "low_table", "label": "矮桌", "kind": "furniture", "center": [0.45, 0.16, -0.25], "half": [0.34, 0.16, 0.26] },
+    { "id": "side_table", "label": "边几", "kind": "furniture", "center": [-0.45, 0.16, 0.62], "half": [0.18, 0.16, 0.18] },
+    { "id": "plant_pot", "label": "植物盆", "kind": "furniture", "center": [2.9, 0.2, -3.2], "half": [0.2, 0.2, 0.2] }
+  ]
+}

@@ -1,0 +1,165 @@
+#!/usr/bin/env node
+// scene.json 是不是 physics.ts 的忠实副本 —— 机械比对，不一致 exit 1。
+//
+// 为什么需要它：场景的数值真源是 testbed/src/console/physics.ts 的 fixed(...)（Rapier 侧），
+// sim_server/scene.json 是它的搬运副本（MuJoCo 侧）。只要允许「两边各写一遍」，迟早分叉成两个房间。
+// 这个脚本把「单一真源」从口头承诺变成一条能跑的命令：
+//
+//   node scripts/check-scene-parity.mjs
+//
+// 比对口径（少一条都不行）：
+//   1. physics.ts 里每个 fixed(x, y, z, hx, hy, hz); // 名字  ->  scene.json 里同 label 的盒子
+//      center(x,y,z) / half(hx,hy,hz) 逐字段比；
+//   2. physics.ts 的 CAPSULE_R / CAPSULE_HALF -> scene.json 的 agent.capsule_r / capsule_half；
+//   3. 双向：scene.json 多出来的盒子也算不一致（那等于凭空加家具）；
+//   4. 条数对不上（少搬 / 多搬）直接失败。
+//
+// 退出码：0 = 全部一致；1 = 有差异（差异逐条打到 stderr）。
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const EPS = 1e-9;
+
+function arg(flag, fallback) {
+  const i = process.argv.indexOf(flag);
+  return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
+}
+
+const physicsPath = path.resolve(REPO, arg('--physics', 'testbed/src/console/physics.ts'));
+const scenePath = path.resolve(REPO, arg('--scene', 'sim_server/scene.json'));
+
+const problems = [];
+const fmt = (v) => (Number.isFinite(v) ? String(Number(v)) : String(v));
+
+/** physics.ts 里的 fixed(...) 调用 -> [{ label, center:[3], half:[3], line }] */
+function parsePhysicsFixed(source) {
+  const out = [];
+  const lines = source.split(/\r?\n/);
+  // fixed(x, y, z, hx, hy, hz); // 名字
+  // 定义行 `const fixed = (x: number, ...)` 里没有字面量数字，不会命中这条正则。
+  const re =
+    /^\s*fixed\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)\s*;\s*(?:\/\/\s*(.+?))?\s*$/;
+  lines.forEach((raw, i) => {
+    const m = raw.match(re);
+    if (!m) return;
+    const nums = m.slice(1, 7).map(Number);
+    const label = (m[7] || '').trim();
+    if (!label) {
+      problems.push('physics.ts:' + (i + 1) + ' 的 fixed(...) 后面没有 "// 名字" 注释，无法和 scene.json 对齐');
+    }
+    out.push({ label, center: nums.slice(0, 3), half: nums.slice(3, 6), line: i + 1 });
+  });
+  return out;
+}
+
+/** physics.ts 的胶囊常数 */
+function parseCapsule(source) {
+  const grab = (name) => {
+    const m = source.match(new RegExp('export const ' + name + ' = (-?\\d+(?:\\.\\d+)?)'));
+    if (!m) problems.push('physics.ts 里找不到 export const ' + name);
+    return m ? Number(m[1]) : NaN;
+  };
+  return { capsule_r: grab('CAPSULE_R'), capsule_half: grab('CAPSULE_HALF') };
+}
+
+function compareVec(label, field, got, want) {
+  const keys = ['x', 'y', 'z'];
+  for (let i = 0; i < 3; i += 1) {
+    const a = got[i];
+    const b = want[i];
+    if (!Number.isFinite(a) || Math.abs(a - b) > EPS) {
+      problems.push(
+        label + '.' + field + '.' + keys[i] + ' 不一致：scene.json=' + fmt(a) + '  physics.ts=' + fmt(b),
+      );
+    }
+  }
+}
+
+function compareNum(label, got, want) {
+  if (!Number.isFinite(got) || Math.abs(got - want) > EPS) {
+    problems.push(label + ' 不一致：scene.json=' + fmt(got) + '  physics.ts=' + fmt(want));
+  }
+}
+
+// ---------- 读两边 ----------
+
+if (!fs.existsSync(physicsPath)) {
+  console.error('scene-parity: 找不到 ' + path.relative(REPO, physicsPath) + '（--physics 可指定别的）');
+  process.exit(1);
+}
+if (!fs.existsSync(scenePath)) {
+  console.error('scene-parity: 找不到 ' + path.relative(REPO, scenePath) + '（--scene 可指定别的）');
+  process.exit(1);
+}
+
+const physicsSrc = fs.readFileSync(physicsPath, 'utf8');
+const scene = JSON.parse(fs.readFileSync(scenePath, 'utf8'));
+
+const fixed = parsePhysicsFixed(physicsSrc);
+const capsule = parseCapsule(physicsSrc);
+const boxes = Array.isArray(scene.boxes) ? scene.boxes : [];
+
+if (fixed.length === 0) {
+  problems.push('physics.ts 里一个 fixed(...) 都没解析到（正则与源码格式对不上了）');
+}
+
+// ---------- 逐条比 ----------
+
+const byLabel = new Map(boxes.map((b) => [String(b.label || ''), b]));
+for (const entry of fixed) {
+  const box = byLabel.get(entry.label);
+  if (!box) {
+    problems.push('physics.ts:' + entry.line + ' 的 "' + entry.label + '" 在 scene.json 里没有对应盒子');
+    continue;
+  }
+  compareVec(entry.label, 'center', Array.isArray(box.center) ? box.center.map(Number) : [], entry.center);
+  compareVec(entry.label, 'half', Array.isArray(box.half) ? box.half.map(Number) : [], entry.half);
+  byLabel.delete(entry.label);
+}
+for (const leftover of byLabel.values()) {
+  problems.push('scene.json 的 "' + leftover.label + '"（id=' + leftover.id + '）在 physics.ts 里没有对应的 fixed(...)');
+}
+
+const agent = scene.agent || {};
+compareNum('agent.capsule_r', Number(agent.capsule_r), capsule.capsule_r);
+compareNum('agent.capsule_half', Number(agent.capsule_half), capsule.capsule_half);
+
+// 出生点：physics.ts 的 .setTranslation(0, CAPSULE_HALF + CAPSULE_R + 0.02, 0.4)
+// 水平分量（x, z）搬进 scene.json 的 agent.spawn；竖直分量必须是胶囊站高的表达式，
+// 不许在 physics.ts 里改成字面量（那等于又抄了一遍数）。
+const spawnMatch = physicsSrc.match(
+  /setTranslation\(\s*(-?\d+(?:\.\d+)?)\s*,\s*([^,]+?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/,
+);
+const spawn = agent.spawn || {};
+if (!spawnMatch) {
+  problems.push('physics.ts 里没解析到 setTranslation(x, ..., z)（胶囊出生点）');
+} else {
+  const [, sx, sy, sz] = spawnMatch;
+  if (!/CAPSULE_HALF/.test(sy) || !/CAPSULE_R/.test(sy)) {
+    problems.push('physics.ts 的出生点竖直分量不再是 CAPSULE_HALF + CAPSULE_R + ...（scene.json 的 y 是从它推的）');
+  }
+  compareNum('agent.spawn.x', Number(spawn.x), Number(sx));
+  compareNum('agent.spawn.z', Number(spawn.z), Number(sz));
+}
+
+const compared = fixed.length * 2 + 4; // 每个盒子比 center+half，再加两个胶囊常数 + 出生点 x/z
+
+// ---------- 结论 ----------
+
+if (problems.length > 0) {
+  console.error('scene-parity: FAIL —— ' + path.relative(REPO, scenePath) + ' 不是 ' + path.relative(REPO, physicsPath) + ' 的忠实副本');
+  for (const item of problems) console.error('  - ' + item);
+  console.error('  （改数只许改 physics.ts，再同步 scene.json；box=' + fixed.length + ' 条，比了 ' + compared + ' 项）');
+  process.exit(1);
+}
+
+console.log(
+  'scene-parity: OK —— boxes=' + fixed.length + ' + agent=2，共比对 ' + compared + ' 项，全部与 ' + path.relative(REPO, physicsPath) + ' 一致',
+);
+console.log(
+  '  范围：' + fixed.map((f) => f.label).join(' / ') + '；胶囊 r/' + fmt(capsule.capsule_r) + ' half/' + fmt(capsule.capsule_half),
+);
+process.exit(0);

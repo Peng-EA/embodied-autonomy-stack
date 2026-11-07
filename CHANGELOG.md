@@ -11,6 +11,12 @@
 
 ### Added
 
+- **场景单一真源 + G1 真撞桌（P1）**：新增 `sim_server/scene.json`（9 件家具的名字/中心/半长逐位搬自 `physics.ts`，
+  含出生点）与 `sim_server/scene.py`（y-up→z-up 只换算一次，floor 顶面必须 0.0）；`world.py` 用 MjSpec 加 `scene_<id>` box，
+  `g1.xml` 未改；新增 `scripts/check-scene-parity.mjs` 双向比对 22 项。
+  修掉一个真实回归：原出生点 (0,0) 与矮桌 AABB 重叠 → 站立漂移 0.0002→0.0275 m、走路第一步就摔；改到 (0,−0.4) 后回到 0.0002。
+  实测（n=1，25° 斜撞）：首次接触 2.880 s、blocked 判定 9 帧、穿透 −0.0038 m、不摔、8 s 走 3.873 m；
+  正撞 blocked 连续 257 帧（判据改为"接触后 ≤10 帧内变 true 且持续保持"，理由见 `docs/testbed.md`）。
 - **G1 会走了：接入 DeepMind playground 的 joystick 策略（P2b）**：新增 `sim_server/policies/g1_joystick.py`
   （103 维 obs / 29 维动作 / 50 Hz / ONNX 权重 md5 双验）与 `sim_server/modes.py`（HOLD↔POLICY 滞回 + 0.2 s 增益 ramp
   + 回 HOLD 前刹车）。只有 POLICY 模式把执行器换成训练值 kp=75/kd=2，HOLD 仍用 kp=500 的 pose hold。

@@ -221,6 +221,34 @@ obs 逐行照 `play_g1_joystick.py` + `joystick.py:_get_obs`：103 维（含 3 �
 
 **边界**：该策略**没有静止模式**（cmd=0 跑 5 s 漂 0.387 m，静止只能靠 HOLD）；把增益换回 MJCF 原样
 kp=500 会 4 s 倒地（训练假设是 kp=75/kd=2）；侧移、推扰、60 s 连续、`unitree_rl_mjlab` 的导出 onnx 均**未测（TBD）**。
+### 场景单一真源与碰撞（P1 · `sim_server/scene.json`）
+
+家具不再手写两份：9 条结构（地板 / 后墙 / 左墙 / 桌 / 床 / 凳 / 矮桌 / 边几 / 植物盆）的名字、中心、半长
+逐位抄自 `testbed/src/console/physics.ts` 的 `fixed(...)`，`node scripts/check-scene-parity.mjs` 双向比对
+**22 项**（9 盒 × 6 分量 + 胶囊 r/half + 出生点 x/z），任何一边改了另一边没跟上就 exit 1。
+
+`sim_server/world.py` 用 MjSpec 给每件家具加一个 `scene_<id>` 的 box geom，`g1.xml` 一个字节没动；
+地板在 MuJoCo 用无限平面代替 16×16 盒子（截面等价，顶面必须 = 0.0，否则 `scene.py` 直接报错）。
+y-up（three）→ z-up（MuJoCo）的换算只在 `scene.py` 里做一次。
+
+**顺带修掉一个真实回归**：G1 原出生点 (0,0) 与矮桌的 AABB（x 0.11–0.79、z −0.51–0.01）重叠，
+脚一出生就顶着桌子 → 30 s 站立漂移 0.0002 → 0.0275 m、`--walk` 第一步就摔。
+出生点改到 `physics.ts` 的 (0, 0.74, 0.4)→ MuJoCo (0, −0.4) 后：漂移回到 **0.0002 m**，走路 0.5531 m/s 复现。
+
+**碰撞实测（2026-11-07 · 本机 · n=1 · `selfcheck --collide --seconds 8`，25° 斜撞，手先挂桌沿）**
+
+| 指标 | 实测 | 判据 |
+|---|---|---|
+| 首次接触 | 2.880 s（`scene_desk` ↔ `left_wrist_yaw_link`，接触最长 4 点） | — |
+| blocked 判定时延 | 接触后 0.512 s / **9 帧** | ≤ 10 帧（=0.16 s 量级的检测时延） |
+| 穿透深度 | −0.0038 m（负 = 穿进去） | ≥ −0.02 m |
+| 跌倒 | 否（z_min 0.727） | 不摔 |
+| 8 s 位移 | 3.873 m（被挡 9 帧后滑开继续走） | — |
+
+**判据口径（P1 定，替换计划里"撞桌 ≤10 帧 blocked=true"的字面读法）**：那 10 帧限制的是**检测时延**，
+不是"碰撞只能持续 10 帧"。正撞实测 `blocked` 连续 **257 帧**、8 s 只挪 1.06 m——持续 blocked 才是物理真相，
+L2 遇障要的正是这个持续信号。判据改为：**首次接触后 ≤10 帧内 `blocked` 变 true，且持续接触期间保持 true**。
+正撞布置（`--collide-skew 0 --collide-gap 1.0 --collide-offset 0`）保留可复现，两个场景都要跑。
 ## 设计（三层，各管一件事）
 
 | 层 | 位置 | 频率 | 职责 |

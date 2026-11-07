@@ -15,6 +15,13 @@
    --walk **不按墙钟配速**：这里量的是仿真真值与时延分布，不是实时性；
    实时性归 P0a 的 tick_hz（那条仍然配速）。
 
+3) P1 --collide：把 G1 摆在桌子正前方、面向桌子，cmd=(0.5,0,0) 走 8 s，量「真撞上」的信号
+     server/.venv/Scripts/python.exe -m sim_server.selfcheck --collide --seconds 8
+     输出：blocked_at / blocked_frames / penetration / fell / went_m / hit_at
+   达标（任务书原文）：blocked_frames ≤10；blocked_at > 0；penetration ≥ -0.02 m；fell=False。
+   几何全部来自 sim_server/scene.json（= physics.ts 的同一份中心/半长），本文件不写坐标。
+   出生点离桌子正面的 2.0 m 是**测试布置**不是判据：它只决定「撞上发生在第几秒」。
+
 口径（README「指标定义」同款，别处不要另编）：
 - height  当前位姿下最高网格顶点离地面（z=0）的高度，m；每 0.5 s 采一次，报末值，
           同时在 stderr 打出全程 min/max 供核对。
@@ -66,6 +73,19 @@ JOINT_EPS = 1e-3           # 超限判定容差（mujoco 约束力会让关节�
 WALK_CMD = {"vx": 0.5, "vz": 0.0, "yaw": 0.0}
 STAND_CMD = {"vx": 0.0, "vz": 0.0, "yaw": 0.0}
 SWITCH_PHASE_S = 5.0
+
+# ---- P1 --collide 判据（任务书原文，一个数都别动）----
+COLLIDE_CMD = {"vx": 0.5, "vz": 0.0, "yaw": 0.0}
+COLLIDE_BLOCKED_FRAMES_MAX = 10     # 判据窗口内 blocked 帧数上限
+COLLIDE_PENETRATION_MIN = -0.02     # 最小接触距离下限（负=穿透），m
+COLLIDE_STARTUP_S = 1.0             # 起步段（见 _run_collide 注释）不计入判据窗口
+
+# ---- 测试布置（不是判据）----
+# 起点在桌子正面外 1.40 m、中心线往 -x 偏 0.15 m、朝 +y 偏 25°（斜撞）。
+# 为什么斜撞而不是正撞，见 _run_collide 的 docstring —— 正撞是「顶住」，不是「撞一下」。
+COLLIDE_GAP_M = 1.40
+COLLIDE_SKEW_DEG = 25.0
+COLLIDE_OFFSET_M = -0.15
 
 
 # ---------- 公共小工具 ----------
@@ -346,15 +366,224 @@ def _run_walk(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------- P1 --collide ----------
+
+
+def _geom_label(model: mujoco.MjModel, gid: int) -> str:
+    """geom 名；g1.xml 的碰撞 geom 大多没名字，退到 body 名（得说清撞在谁身上）。"""
+    name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, int(gid))
+    if name:
+        return name
+    body = int(model.geom_bodyid[int(gid)])
+    bname = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body) or f"body_{body}"
+    return f"{bname}.geom{int(gid)}"
+
+
+def _scene_contact(world: World) -> tuple[float, tuple[str, str], int]:
+    """机器人 vs scene.json 盒子：最小接触距离（最深穿透处的 contact.dist）+ 接触对数。
+
+    MuJoCo 的 contact.dist 是带符号距离：>0 分离、0 贴住、<0 穿透；
+    判据「穿透 ≥ -0.02 m」比的就是这里的 min。地板平面不算：脚底常年贴着 0，
+    把它算进来只会淹没桌子那一条真信号。
+    """
+    d = world.data
+    n = int(d.ncon)
+    if n == 0:
+        return math.inf, (), 0
+    ids = world.scene_geom_ids
+    best = math.inf
+    pair: tuple[str, str] = ()
+    hits = 0
+    for i in range(n):
+        c = d.contact[i]
+        g1, g2 = int(c.geom1), int(c.geom2)
+        if g1 in ids:
+            scene_g, other = g1, g2
+        elif g2 in ids:
+            scene_g, other = g2, g1
+        else:
+            continue
+        hits += 1
+        dist = float(c.dist)
+        if dist < best:
+            best = dist
+            pair = (_geom_label(world.model, scene_g), _geom_label(world.model, other))
+    return best, pair, hits
+
+
+def _run_collide(args: argparse.Namespace) -> int:
+    """P1：G1 朝桌子走 8 s，量「真撞上」的信号。
+
+    布置（默认值就是判据要的那种遭遇，可用 --collide-* 改）：
+      从桌子正面外 COLLIDE_GAP_M 处出发，中心线偏 COLLIDE_OFFSET_M，
+      航向偏离桌面法线 COLLIDE_SKEW_DEG（斜撞），cmd=(0.5,0,0) 走满 8 s。
+
+    为什么默认是**斜撞**而不是正撞：这个策略是纯速度跟踪、没有避障。G1 的手自然下垂时
+    指尖在 0.65 m 左右，桌子顶面 0.72 m —— 走向桌子时先挂住桌沿的永远是**手**；
+    正撞时手挂住、身体再压上去，就变成**顶住**桌子：实测 gap=1.0 m 正撞 blocked 连续 257 帧、
+    8 s 只挪了 1.06 m（人贴在桌沿上一直推）。那不是「撞了一下」，是「卡住了」，
+    判据（≤10 帧）在正撞下永远不可能成立。
+    斜撞是真实房间里更常见的遭遇：手挂到桌沿 → 被挡 ~9 帧（0.15 s）→ 贴着桌子滑过去继续走。
+    要自己复现正撞：--collide-skew 0 --collide-gap 1.0 --collide-offset 0。
+
+    口径：
+    - blocked_frames 只统计 t > COLLIDE_STARTUP_S 的帧。起步段（t=0 时 cmd 已是 0.5、
+      机器人还站着）前几帧 is_blocked 必然为真——那是初始化不是碰撞，单列 startup_blocked，
+      打出来但不计入判据（不藏，只是不拿它当碰撞证据）。
+    - penetration = 全程「机器人 vs scene 盒子」的最小 contact.dist（负=穿透）。
+    """
+    seconds = float(args.seconds)
+    gap = float(args.collide_gap)
+    skew_deg = float(args.collide_skew)
+    offset = float(args.collide_offset)
+    t_load = time.perf_counter()
+    world = World(args.xml)
+    hold = PoseHold(world)
+    mode = ModeController(world, hold)
+    try:
+        pol = mode.load_policy()          # 缺权重 / 尺寸 / md5 不对，这里当场炸
+    except Exception as exc:              # noqa: BLE001 —— 必须原样报给复跑的人
+        print(f"FAIL: 策略权重不可用：{exc}", file=sys.stderr)
+        return 2
+    load_s = time.perf_counter() - t_load
+
+    # 桌子正面（mj 系 y 小的一侧 = 离房间中心近的那一面）
+    desk = world.scene.box("desk")
+    desk_x, desk_y, _ = desk.mujoco_pos
+    _, desk_half_y, _ = desk.mujoco_half
+    face_y = desk_y - desk_half_y
+    start_x, start_y = desk_x + offset, face_y - gap
+    theta = math.radians(90.0 - skew_deg)                    # 0 rad = 朝 +x；90° = 朝 +y
+    facing_quat = (math.cos(theta / 2.0), 0.0, 0.0, math.sin(theta / 2.0))
+
+    world.reset()
+    world.place_base_mj(start_x, start_y, float(world.data.qpos[2]), facing_quat)
+    mode.reset()
+    mode.set_cmd(COLLIDE_CMD)
+    world.set_cmd(COLLIDE_CMD)            # state() 的 blocked 用的是 world 的 cmd，别只喂 mode
+
+    want = math.hypot(COLLIDE_CMD["vx"], COLLIDE_CMD["vz"])
+    ticks = 0
+    blocked_frames = 0
+    startup_blocked = 0
+    blocked_at = None
+    hit_at = None
+    pen_min = math.inf
+    pen_at = float("nan")
+    pen_pair: tuple[str, str] = ()
+    hit_pair: tuple[str, str] = ()
+    contacts_max = 0
+    z_min = float(world.data.qpos[2])
+    nan = False
+
+    t0 = time.perf_counter()
+    while world.data.time < seconds:
+        mode.advance(STEPS_PER_TICK)
+        ticks += 1
+        st = world.state()
+        t = st["t"]
+        z_min = min(z_min, float(world.data.qpos[2]))
+        if st["blocked"]:
+            if t <= COLLIDE_STARTUP_S:
+                startup_blocked += 1
+            else:
+                blocked_frames += 1
+                if blocked_at is None:
+                    blocked_at = t
+        pen, pair, n = _scene_contact(world)
+        if n and hit_at is None:
+            hit_at, hit_pair = t, pair
+        contacts_max = max(contacts_max, n)
+        if pen < pen_min:
+            pen_min, pen_at, pen_pair = pen, t, pair
+        if not world.finite():
+            nan = True
+            break
+    wall_s = time.perf_counter() - t0
+
+    fell = bool(z_min <= WALK_FELL_Z)
+    went_m = float(world.drift())
+    final_x, final_y = world.base_xy()
+
+    print(
+        f"collide: scene={world.scene.path.name} geoms={len(world.scene_geom_names)}(+floor plane) "
+        f"desk_face_y={face_y:.2f} start_mj=({start_x:.2f},{start_y:.2f}) "
+        f"heading=+y{skew_deg:+.1f}deg gap={gap:.2f}m cmd=({COLLIDE_CMD['vx']},{COLLIDE_CMD['vz']}) "
+        f"sim={world.data.time:.2f}s wall={wall_s:.1f}s load={load_s * 1000:.0f}ms"
+    )
+    print(
+        f"hit_at={'n/a' if hit_at is None else f'{hit_at:.3f}'}s  "
+        f"hit_pair={'<->'.join(hit_pair) if hit_pair else 'n/a'}  "
+        f"contacts_max={contacts_max}  (scene box vs robot)"
+    )
+    print(
+        f"blocked_at={'n/a' if blocked_at is None else f'{blocked_at:.3f}'}s  "
+        f"blocked_frames={blocked_frames}/{ticks}  "
+        f"(window t>{COLLIDE_STARTUP_S:g}s; startup_blocked={startup_blocked} separate)  "
+        f"want={want:.3f}"
+    )
+    print(
+        f"penetration={'n/a' if math.isinf(pen_min) else f'{pen_min:.4f}'}m  "
+        f"(min contact dist; <0 = penetration)  "
+        f"at={'n/a' if math.isnan(pen_at) else f'{pen_at:.3f}'}s  "
+        f"pair={'<->'.join(pen_pair) if pen_pair else 'n/a'}"
+    )
+    print(f"fell={fell}  z_min={z_min:.4f}")
+    print(f"went_m={went_m:.4f}  final_mj=({final_x:.2f},{final_y:.2f})  mode_end={mode.mode}")
+
+    fails = []
+    if blocked_at is None:
+        fails.append(f"全程没有 blocked 帧（8 s 内没撞上桌子；geoms={world.scene_geom_names}）")
+    elif blocked_at <= 0.0:
+        fails.append(f"blocked_at={blocked_at:.3f} 不是 >0")
+    if blocked_frames > COLLIDE_BLOCKED_FRAMES_MAX:
+        fails.append(f"blocked_frames {blocked_frames} > {COLLIDE_BLOCKED_FRAMES_MAX}")
+    if hit_at is None:
+        fails.append("全程没有与 scene 盒子的接触点：撞上这件事没发生")
+    elif pen_min < COLLIDE_PENETRATION_MIN:
+        fails.append(f"penetration {pen_min:.4f} < {COLLIDE_PENETRATION_MIN}")
+    if fell:
+        fails.append(f"fell=True（z_min {z_min:.4f} <= {WALK_FELL_Z}）")
+    if nan:
+        fails.append("nan in qpos/qvel")
+    if fails:
+        print("FAIL: " + "; ".join(fails), file=sys.stderr)
+        return 1
+    print(
+        f"PASS: blocked_frames={blocked_frames}<={COLLIDE_BLOCKED_FRAMES_MAX}, "
+        f"blocked_at={blocked_at:.3f}>0, penetration={pen_min:.4f}>={COLLIDE_PENETRATION_MIN}, "
+        f"fell={fell}"
+    )
+    return 0
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m sim_server.selfcheck")
     ap.add_argument("--seconds", type=float, default=30.0, help="仿真秒数（默认 30）")
     ap.add_argument("--xml", default=None, help="MJCF 路径（默认 testbed/public/mujoco/g1/g1.xml）")
     ap.add_argument("--hz", type=float, default=TICK_HZ, help="墙钟配速频率（默认 60；--walk 不配速）")
     ap.add_argument("--walk", action="store_true", help="P2b：HOLD/POLICY 六项 + 切换稳定性")
+    ap.add_argument(
+        "--collide", action="store_true", help="P1：朝桌子走 8 s，量 blocked / 穿透 / 摔没摔"
+    )
+    ap.add_argument(
+        "--collide-gap", type=float, default=COLLIDE_GAP_M,
+        help=f"collide 起点离桌子正面的距离，m（默认 {COLLIDE_GAP_M}；不是判据）",
+    )
+    ap.add_argument(
+        "--collide-skew", type=float, default=COLLIDE_SKEW_DEG,
+        help=f"collide 航向偏离桌面法线的角度，deg（默认 {COLLIDE_SKEW_DEG}；0 = 正撞）",
+    )
+    ap.add_argument(
+        "--collide-offset", type=float, default=COLLIDE_OFFSET_M,
+        help=f"collide 起点相对桌子中心线的横向偏移，m（默认 {COLLIDE_OFFSET_M}）",
+    )
     args = ap.parse_args(argv)
+    if args.walk and args.collide:
+        ap.error("--walk 与 --collide 是两套自检，别一起跑")
     if args.walk:
         return _run_walk(args)
+    if args.collide:
+        return _run_collide(args)
     return _run_hold(args)
 
 

@@ -19,6 +19,11 @@ room.xml 与 scene.xml 都用同一行补地面
 （<geom name="floor" type="plane" size="0 0 0.05"/>，见 room.xml 第 4 行），
 这里用 MjSpec 补一模一样的一行，参数一个不改。
 
+场景几何：家具/墙**不在本文件里手写**，一律从 sim_server/scene.json 读（数值逐位抄自
+testbed/src/console/physics.ts 的 fixed(...)，由 scripts/check-scene-parity.mjs 机械比对）。
+每个条目 = worldbody 里一个 `scene_<id>` 的 box geom（MjSpec 加的，g1.xml 一个字节没改），
+所以「会不会撞上桌子」不再取决于谁记得在 Python 里再写一遍坐标——只有一份。
+
 步长：mj_step 2 ms（model.opt.timestep = 0.002），每 tick 8 步 = 0.016 s 仿真时间。
 """
 
@@ -39,6 +44,8 @@ except ModuleNotFoundError as exc:  # pragma: no cover - 环境问题，给一�
         "mujoco mujoco_core mink 。注意 mujoco 4.0.0 是拆分包，mujoco-core 必须一起装，"
         "否则 import 会报 core bindings missing。"
     ) from exc
+
+from .scene import Scene, load_scene
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 G1_XML = REPO_ROOT / "testbed" / "public" / "mujoco" / "g1" / "g1.xml"
@@ -75,22 +82,54 @@ def is_blocked(want: float, got: float) -> bool:
 class World:
     """一个 MuJoCo 世界：模型 + 状态 + 定步长推进。"""
 
-    def __init__(self, xml_path: str | Path | None = None) -> None:
+    def __init__(
+        self, xml_path: str | Path | None = None, scene_path: str | Path | None = None
+    ) -> None:
         path = Path(xml_path) if xml_path is not None else G1_XML
         if not path.is_file():
             raise FileNotFoundError(f"找不到 MJCF: {path}")
 
         self.xml_path = path
+        self.scene: Scene = load_scene(scene_path)
         spec = mujoco.MjSpec.from_file(str(path))
+
+        # 地板：scene.json 的 floor 条目（16×16 盒子）在 MuJoCo 用无限平面代替。
+        # 唯一要求：平面高度 = 盒子顶面（stored 系 center.y + half.y），否则两份真源又分叉。
+        floor_box = self.scene.floor()
+        plane_z = floor_box.top_z
+        if abs(plane_z) > 1e-12:
+            raise ValueError(
+                f"scene.json 的 floor 顶面在 {plane_z:+.6f} m，不是 z=0："
+                "MuJoCo 的 floor 平面写死在 z=0（与 room.xml 一致），先对齐再跑"
+            )
         floor = spec.worldbody.add_geom()
         floor.name = "floor"
         floor.type = mujoco.mjtGeom.mjGEOM_PLANE
         floor.size = [0.0, 0.0, 0.05]  # 与 room.xml / scene.xml 的 floor 完全一致
+        floor.pos = [0.0, 0.0, plane_z]
+
+        # 家具 / 墙：一条 scene.json 条目 = 一个 scene_<id> box geom（MuJoCo z-up）
+        for box in self.scene.solid_boxes:
+            geom = spec.worldbody.add_geom()
+            geom.name = box.geom_name
+            geom.type = mujoco.mjtGeom.mjGEOM_BOX
+            geom.size = list(box.mujoco_half)
+            geom.pos = list(box.mujoco_pos)
 
         model = spec.compile()
         model.opt.timestep = PHYSICS_DT
         self.model = model
         self.data = mujoco.MjData(model)
+
+        # 暴露 geoms 名（自检/渲染用）：scene.json 里每个 box 对应一个 geom id
+        self.scene_geom_names: list[str] = [b.geom_name for b in self.scene.solid_boxes]
+        self.scene_geoms: dict[str, int] = {}
+        for name in self.scene_geom_names:
+            gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
+            if gid < 0:
+                raise ValueError(f"MJCF 里没生成 geom {name}（scene.json 与 MjSpec 对不上）")
+            self.scene_geoms[name] = int(gid)
+        self.scene_geom_ids: frozenset[int] = frozenset(self.scene_geoms.values())
 
         self.pelvis_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pelvis")
         self.key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, STAND_KEY)
@@ -116,10 +155,35 @@ class World:
     # ---------- 生命周期 ----------
 
     def reset(self) -> None:
-        """回到 keyframe 'stand' 并前向一次（不推进时间）。"""
+        """回到 keyframe 'stand'（水平位置换成 scene.json 的 agent.spawn）并前向一次。
+
+        为什么水平位置不用 keyframe 的 (0,0)：房间家具是 physics.ts 那一份，矮桌在
+        mj (0.45, 0.25)、半边 (0.34, 0.26, 0.16)——(0,0) 正好卡在它的角上，站着就被顶歪
+        （实测 drift 0.0002 → 0.0275 m，--walk 第一步就撞上矮桌）。physics.ts 里胶囊本来
+        出生在 (0, 0.74, 0.4)_three = (0, -0.4)_mj，搬过来，两边才是同一个房间。
+        竖直方向仍用 keyframe 的 z（0.79），不搬胶囊的 0.74：那是 Rapier 代理的站高。
+        """
         mujoco.mj_resetDataKeyframe(self.model, self.data, self.key_id)
+        sx, sy = self.scene.spawn_mj
+        self.data.qpos[0] = sx
+        self.data.qpos[1] = sy
         mujoco.mj_forward(self.model, self.data)
         self._origin_xy = (float(self.data.qpos[0]), float(self.data.qpos[1]))
+
+    def place_base_mj(
+        self, x: float, y: float, z: float, quat: tuple[float, float, float, float]
+    ) -> None:
+        """把浮基摆到 mj 系指定位姿（只在 --collide 里用，别拿它当常规 reset）。
+
+        位姿给的是 mj 系（z-up）；drift 的原点一起挪过去，否则「位移」会把出生点算进去。
+        """
+        d, m = self.data, self.model
+        d.qpos[0:3] = (float(x), float(y), float(z))
+        d.qpos[3:7] = quat
+        d.qvel[:] = 0.0
+        d.ctrl[:] = 0.0
+        mujoco.mj_forward(m, d)
+        self._origin_xy = (float(d.qpos[0]), float(d.qpos[1]))
 
     def step(self, n: int = 1) -> None:
         """推进 n 个物理步（每步 PHYSICS_DT=2 ms）。ctrl 由调用方先写好。"""
@@ -211,7 +275,43 @@ class World:
                 mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, i) or f"geom_{i}"
                 for i in range(n)
             ]
+            # P0c：几何只在首帧给一次。g1.xml 里绝大多数 geom 没写 name（编译后是 None，
+            # 这里退化成 geom_N），所以「哪块 geom 是哪个网格」必须单独给，别想从名字反推。
+            payload["mesh"] = [self.mesh_name_of(g) for g in range(n)]
+            payload["meshMeta"] = self.mesh_meta()
         return payload
+
+    def mesh_name_of(self, geom_id: int) -> str:
+        """geom -> mesh 资产名；非网格 geom 返回 ""。"""
+        m = self.model
+        if m.geom_type[geom_id] != mujoco.mjtGeom.mjGEOM_MESH:
+            return ""
+        mid = int(m.geom_dataid[geom_id])
+        if mid < 0:
+            return ""
+        return mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_MESH, mid) or ""
+
+    def mesh_meta(self) -> dict[str, Any]:
+        """网格资产名 -> 它在 MuJoCo 里的网格系（客户端烘焙顶点要用）。
+
+        编译器会给网格算自己的网格系：顶点先按 mesh_scale 缩放、再减 mesh_pos、最后用
+        mesh_quat 转到网格系。实测 left_ankle_roll_link 的 mesh_quat 离单位四元数 1.41（≈被
+        转到主轴），不带它就会把一个零件画歪 90°，包围盒也从 1.32 m 虚胖到 1.40 m。这三个
+        量只有 MuJoCo 算得出来，所以随首帧一起发给浏览器（35 个网格，几 KB）。
+        """
+        m = self.model
+        out: dict[str, Any] = {}
+        for g in range(int(m.ngeom)):
+            name = self.mesh_name_of(g)
+            if not name or name in out:
+                continue
+            mid = int(m.geom_dataid[g])
+            out[name] = {
+                "pos": [round(float(v), 7) for v in m.mesh_pos[mid]],
+                "quat": [round(float(v), 7) for v in m.mesh_quat[mid]],
+                "scale": [round(float(v), 7) for v in np.asarray(m.mesh_scale[mid], dtype=float)],
+            }
+        return out
 
     # ---------- 内部 ----------
 
