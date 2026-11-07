@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>G1 演示台 · 可视 · 可调</title>
+    <!-- 内联空 favicon：headless 截图时别让 404 混进 console error（验收要求 0 条） -->
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <div id="app">
+      <header id="bar">
+        <div class="brand">
+          <span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <div>
+            <h1>G1 // DEMO <em>sim_server · MuJoCo</em></h1>
+            <p>权威环 60 Hz · 状态与位姿全部来自服务端 · 指令统一走 cmd-gate</p>
+          </div>
+        </div>
+        <div class="bar-meta">
+          <span class="pill" id="ws-pill">WS 未连接</span>
+          <span class="pill ghost" id="endpoint-pill">—</span>
+        </div>
+      </header>
+
+      <main>
+        <section id="stage">
+          <canvas id="scene"></canvas>
+          <div class="stage-note" id="stage-note">连接 sim_server…</div>
+          <!-- 舞台左下角的图例 chips：clearance / 接触 / 实时读数（事件日志已移入右侧面板） -->
+          <div class="stage-legend" id="legend">
+            <span><i class="k-ray"></i>clearance</span>
+            <span><i class="k-contact"></i>接触（踝 proxy）</span>
+            <b id="legend-clear">clear — m</b>
+            <b id="legend-ncon">ncon 0</b>
+          </div>
+        </section>
+
+        <aside id="panel">
+          <!-- 可滚区：状态吸顶，其余按 指令 → 动作 → 预设 → 显示 顺序滚。
+               装一个 .panel-body 外壳是为了在"确实有内容要滚"时叠一条底部渐隐，
+               让滚动这件事看得出来（不是把内容裁掉了）。 -->
+          <div class="panel-body" id="panel-body">
+          <div class="panel-scroll" id="panel-scroll">
+            <section class="sec sec-status" id="sec-status">
+              <h2>状态 <em>只读 · 服务端真值</em></h2>
+              <div class="stats">
+                <div class="stat"><span>mode</span><div class="v"><b id="st-mode">—</b></div></div>
+                <div class="stat"><span>speed</span><div class="v"><b id="st-speed">—</b><i>m/s</i></div></div>
+                <div class="stat"><span>y</span><div class="v"><b id="st-y">—</b><i>m</i></div></div>
+                <div class="stat"><span>tSim</span><div class="v"><b id="st-t">—</b><i>s</i></div></div>
+                <div class="stat"><span>WS 帧龄</span><div class="v"><b id="st-age">—</b><i>ms</i></div></div>
+                <div class="stat"><span>帧率</span><div class="v"><b id="st-fps">—</b><i>fps</i></div></div>
+                <div class="stat"><span>dropped</span><div class="v"><b id="st-drop">—</b></div></div>
+                <div class="stat"><span>接触</span><div class="v"><b id="st-ncon">—</b></div></div>
+              </div>
+              <p class="hint" id="gate-hint">闸门：未授权（首帧 cmd 恒为 0）</p>
+            </section>
+
+            <section class="sec">
+              <h2>速度指令 <em>机体前向 / 侧向 · 实时生效</em></h2>
+
+              <div class="row">
+                <div class="row-head"><span>前进 vx</span><b data-out="vx">0.00</b><em>m/s</em></div>
+                <input type="range" data-slider="vx" min="0" max="0.6" step="0.01" value="0" aria-label="前进速度 m/s" />
+              </div>
+
+              <div class="row">
+                <div class="row-head"><span>侧移 vz</span><b data-out="vz">0.00</b><em>m/s</em></div>
+                <input type="range" data-slider="vz" min="-0.3" max="0.3" step="0.01" value="0" aria-label="侧移速度 m/s" />
+              </div>
+
+              <div class="row">
+                <div class="row-head"><span>转向 yaw</span><b data-out="yaw">0.00</b><em>rad/s</em></div>
+                <input type="range" data-slider="yaw" min="-0.5" max="0.5" step="0.01" value="0" aria-label="转向角速度 rad/s" />
+              </div>
+            </section>
+
+            <section class="sec">
+              <h2>动作</h2>
+              <div class="grid">
+                <button type="button" data-act="stand">站立</button>
+                <button type="button" data-act="walk" class="primary">走</button>
+                <button type="button" data-act="stop">停 · 刹车</button>
+                <button type="button" data-act="mimic">播放动作</button>
+                <button type="button" data-act="ik">伸手 IK</button>
+                <button type="button" data-act="reset">复位</button>
+              </div>
+            </section>
+
+            <section class="sec">
+              <h2>预设</h2>
+              <div class="grid four">
+                <button type="button" data-preset="straight">直走 0.5</button>
+                <button type="button" data-preset="diagonal">斜走</button>
+                <button type="button" data-preset="spin">原地转</button>
+                <button type="button" data-preset="zero">零命令</button>
+              </div>
+            </section>
+
+            <section class="sec">
+              <h2>显示</h2>
+              <div class="switches">
+              <label class="switch" title="闸门的自主通道：等价 ?auto=1。关闭时页面的自主请求会被 cmd-gate 拒绝">
+                <input type="checkbox" data-toggle="autonomy" />
+                <i aria-hidden="true"></i>
+                <span>自主模式 <em>≈ ?auto=1</em></span>
+              </label>
+              <label class="switch" title="从 scene_room.json 的真实盒子逐帧算射线；没有数据就保持灰">
+                <input type="checkbox" data-toggle="rays" />
+                <i aria-hidden="true"></i>
+                <span>clearance 射线 <em>7 条</em></span>
+              </label>
+              <label class="switch" title="服务端只发 ncon 计数；圆环画在左右踝 geom 的真实位置（proxy）">
+                <input type="checkbox" data-toggle="contacts" />
+                <i aria-hidden="true"></i>
+                <span>接触点 <em>踝 proxy</em></span>
+              </label>
+              <label class="switch" title="speed 与上行的 |cmd| 两条曲线，滚动 12 s">
+                <input type="checkbox" data-toggle="chart" checked />
+                <i aria-hidden="true"></i>
+                <span>遥测曲线 <em>12 s</em></span>
+              </label>
+              </div>
+            </section>
+          </div>
+          <div class="scroll-fade" aria-hidden="true"><span>▾ 更多</span></div>
+          </div>
+
+          <!-- 遥测曲线：独立卡片，固定高度，默认就完整可见（不进可滚区） -->
+          <section class="card card-chart" id="telemetry-card">
+            <h2>遥测曲线 <em><i class="k-speed"></i>speed<i class="k-cmd"></i>|cmd|</em></h2>
+            <div class="chart" id="chart"></div>
+          </section>
+
+          <!-- 事件日志：折叠区，默认收起，展开最多 3 行高度 -->
+          <details class="logfold" id="log-fold">
+            <summary><span>事件</span><b id="log-count">0</b></summary>
+            <ol id="log"></ol>
+          </details>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="/src/demo/main.ts"></script>
+  </body>
+</html>

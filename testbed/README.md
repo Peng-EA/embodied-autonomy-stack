@@ -18,6 +18,29 @@ node scripts/check-params.mjs   # 与 sim/config.py 对账 @mirror 常量
 
 架构、边界（"不是什么"）、结果与局限见 [`docs/testbed.md`](../docs/testbed.md) 与 [`evals/v0.2/README.md`](../evals/v0.2/README.md)。
 
+## G1 演示台（`demo.html`）
+
+```bash
+node scripts/serve-demo.mjs --port 5183
+# → [serve-demo] web http://127.0.0.1:5183/  （sim_server 自选端口，ws 地址写进 /config.json）
+node scripts/demo-check.mjs
+# → 1440×900 截图 testbed/logs/demo-<ts>.png + 面板元素计数 + console 错误数 + vx=0.5 后 /health 与 WS 速度
+```
+
+面板上的东西都会真的打到服务端，没有装饰性控件：
+
+| 控件 | 实际路径 |
+|---|---|
+| 三个滑杆（vx / vz / yaw） | 机体前向/侧向 → 世界系 → `CmdGate` → `G1BodyWs`；人没输入前恒发 (0,0,0)。yaw 是角速度，按 cmd-gate 现测的增益换成目标朝向 |
+| 站立 / 走 / 停 / 复位 | 改滑杆值（走原生 input 事件）或发零指令；复位只清上行指令（服务端没有 /reset） |
+| 播放动作 / 伸手 IK | 服务端离散通道 `{"mimic":"play"}` / `{"ik":"play"}`（独立 WS），`/health` 的 phase/error 回写到事件流 |
+| 自主模式 | 等价 `?auto=1` 的闸门授权；关闭时 cmd-gate 会拒掉自主请求（denied 计数可见） |
+| clearance 射线 | 盒子真源 = `sim/env/scene_room.json`，由 serve-demo 原样转发（前端不另抄坐标），7 条射线逐帧算 |
+| 接触点 | **proxy**：服务端只给 `ncon` 计数，圆环画在左右踝 geom 的真实位置，不是接触点坐标 |
+
+`--exit-after N` 走同一条关闭链，用来验证"起得来 / 收得干净"（http 与 python 子进程一起退）。
+
+
 ## 注意
 
 - **G1 的网格**（P0c）：WS 档（`?sim` 默认就是）从 `public/mujoco/g1/` 的 35 个 STL 画 G1，

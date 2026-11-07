@@ -12,7 +12,9 @@
     "bench": "tsx src/bench/run.ts",
     "check:params": "node scripts/check-params.mjs",
     "report": "tsx src/bench/report.ts",
-    "shot": "node scripts/shot.mjs"
+    "shot": "node scripts/shot.mjs",
+    "demo": "node scripts/serve-demo.mjs",
+    "demo:check": "node scripts/demo-check.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.21.0",

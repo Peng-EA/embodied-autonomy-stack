@@ -11,6 +11,12 @@
 
 ### Added
 
+- **G1 可视化演示台（`testbed/demo.html`）**：一条命令 `node testbed/scripts/serve-demo.mjs --port 5183` 起「静态页 + 自选端口 sim_server」，
+  右侧面板实时可调（前进/侧移/转向三滑杆、站立·走·停·动作·IK·复位、自主闸门、射线/接触/曲线开关、四个预设），
+  只读区显示 MODE/速度/高度/tSim/帧龄/丢帧/接触数/闸门来源。指令仍只经 `cmd-gate.ts`，面板不绕过闸门。
+  渲染复用 console 的 `buildG1WsView()`（35 块网格 / 393,270 三角），只新增舞台与面板。
+  `demo-check.mjs` 用 `getBoundingClientRect` 断言 26 项 ×2 视口无裁切、console 错误 0、拖滑杆后确实进 POLICY（WS 实测 speed p50 0.509）。
+  三处显示口径已在 `docs/testbed.md` 写明：接触点是代理、WS 延迟是帧龄、出生点 IK 必失败。
 - **人形基线 `g1-full` + ADR-0008（S3）**：新增 [`evals/baselines/g1-full.yaml`](evals/baselines/g1-full.yaml)——开关逐项镜像
   `full`，但声明 `body: g1`，所以它是**人形参照配置**而不是第五条消融；`sim/baseline.py` 注册该 id 并加
   `declared_body()`，`sim/main.py` 对「基线声明的身体 ≠ `--body`」直接 exit 2（不静默降级；历史用法
