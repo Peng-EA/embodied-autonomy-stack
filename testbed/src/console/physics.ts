@@ -43,7 +43,7 @@ export class RoomPhysics {
 
     const body = world.createRigidBody(
       R.RigidBodyDesc.dynamic()
-        .setTranslation(0, CAPSULE_HALF + CAPSULE_R + 0.02, 0.4)
+        .setTranslation(1.3, CAPSULE_HALF + CAPSULE_R + 0.02, 1.2) // spawn_clearance=1.295 m（最近=矮桌）
         .lockRotations()
         .setLinearDamping(0.4)
         .setCcdEnabled(true),

@@ -211,6 +211,36 @@ class G1World(World):
         """
         return self._analytic_nearest()[0]
 
+    def spawn_clearance(self) -> tuple[float, str]:
+        """出生点到房间里每个 box 的**水平**最小间隙（m），以及最近那件的 geom 名。
+
+        口径 = `scripts/check-scene-parity.mjs` 的「出生点净空」断言：在水平面 (x, y_mj) 上算
+        点到 AABB 的距离，地板（plane）不算——它就在脚下，不是"家具"。门槛 0.60 m 写在那个
+        脚本里；这里只报事实，不判（判据只有一份，别在自检里再抄一遍）。
+
+        与脚本的**唯一**差别是数据来源（故意的，两条独立路径）：这里读编译后的 MjModel
+        （geom_pos ± geom_size），脚本读 scene_room.json。谁跟场景分叉都会露出来。
+
+        为什么要有这个数：旧出生点 (0, 0.4)_three 到边几只有 0.273 m，--check 一上来
+        clearance 就 0.127 m < C.CLEARANCE_WARN，看着像阈值太紧，其实是选点错。
+        """
+        x, y = self.pos
+        best = math.inf
+        best_name = ""
+        for name, gid in self.scene_geoms.items():
+            if int(self.model.geom_type[gid]) != int(mujoco.mjtGeom.mjGEOM_BOX):
+                continue                      # scene_* 里只有 box；地板是 plane，不在 scene_geoms
+            px, py = float(self.model.geom_pos[gid][0]), float(self.model.geom_pos[gid][1])
+            hx, hy = float(self.model.geom_size[gid][0]), float(self.model.geom_size[gid][1])
+            dx = max(px - hx - x, 0.0, x - (px + hx))   # 盒体轴对齐：最近点逐轴夹一下
+            dy = max(py - hy - y, 0.0, y - (py + hy))
+            d = math.hypot(dx, dy)
+            if d < best:
+                best, best_name = d, name
+        if not math.isfinite(best):           # 一个盒子都没有：与 _analytic_nearest 同样的兜底
+            return float(C.RAY_LEN), ""
+        return float(best), best_name
+
     def contact_force(self) -> float:
         """机器人**对外**的最大接触力（N），与 world.py 同义：排除地面、排除机器人自己。
 
@@ -690,11 +720,14 @@ def _check() -> int:
     world = G1World()
     load_ms = (time.perf_counter() - t_load) * 1000.0
     m = world.model
+    spawn_gap, spawn_near = world.spawn_clearance()
+    # 出生点净空：实测值（编译后几何），门槛 0.60 m 的判据在 scripts/check-scene-parity.mjs。
     print(
         f"g1_world: xml={world.xml_path.name} nq={m.nq} nv={m.nv} nu={m.nu} "
         f"timestep={m.opt.timestep * 1000:.1f}ms ngeom={m.ngeom} "
         f"scene={world.scene.path.name} rays={C.RAY_COUNT}@z{RAY_Z_M:.2f}m "
-        f"ray_start_r={C.RAY_START_R:.3f}m cmd_max={CMD_MAX_SPEED:.2f}m/s load={load_ms:.0f}ms"
+        f"ray_start_r={C.RAY_START_R:.3f}m cmd_max={CMD_MAX_SPEED:.2f}m/s load={load_ms:.0f}ms "
+        f"spawn_clearance={spawn_gap:.3f}m(nearest={spawn_near or 'n/a'})"
     )
     print(
         "g1_world: geom_groups="

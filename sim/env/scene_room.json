@@ -16,9 +16,9 @@
     "capsule_r": 0.22,
     "capsule_half": 0.5,
     "spawn": {
-      "x": 0,
-      "z": 0.4,
-      "note": "physics.ts 的 RigidBodyDesc.dynamic().setTranslation(0, CAPSULE_HALF + CAPSULE_R + 0.02, 0.4)：水平起点（x, z_three）搬过来；竖直起点不搬（用 g1.xml keyframe stand 的 0.79），那是 MJCF 自己的事。"
+      "x": 1.3,
+      "z": 1.2,
+      "note": "physics.ts 的 RigidBodyDesc.dynamic().setTranslation(1.3, CAPSULE_HALF + CAPSULE_R + 0.02, 1.2)：水平起点（x, z_three）搬过来；竖直起点不搬（用 g1.xml keyframe stand 的 0.79），那是 MJCF 自己的事。选点口径（2026-11-08 修出生点，S1c）：到所有 box 的 AABB 水平最小间隙 1.295 m（最近 = 矮桌 low_table，dx=0.51 / dz=1.19），>= 0.60 m（告警线 0.22 的 2.7 倍）。旧点 (0, 0.4) 到边几只有 0.273 m，实测起步 clearance 0.127 m < 0.22，L2 从 t=0 触发——那是选点错，不是阈值错。朝向只有 MJCF 一侧是固定的（keyframe stand 的 quat，yaw=0 → +x_mj；physics.ts 的胶囊 lockRotations 没有 yaw，three 的朝向由 main.ts 的 goto/rotation 决定），所以按两条走廊各 2 m 验过：+x_mj 正前方无家具（最近的桌面在横向 3.25 m 外）、-z 方向 3.25 m 才到桌面前沿且从矮桌侧向留 0.51 m（> 胶囊 r=0.22）。机械护栏：scripts/check-scene-parity.mjs 的「出生点净空 >= 0.60 m」。"
     }
   },
   "boxes": [

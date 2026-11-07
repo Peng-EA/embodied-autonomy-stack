@@ -13,7 +13,11 @@
 //      center(x,y,z) / half(hx,hy,hz) 逐字段比；
 //   2. physics.ts 的 CAPSULE_R / CAPSULE_HALF -> scene_room.json 的 agent.capsule_r / capsule_half；
 //   3. 双向：scene_room.json 多出来的盒子也算不一致（那等于凭空加家具）；
-//   4. 条数对不上（少搬 / 多搬）直接失败。
+//   4. 条数对不上（少搬 / 多搬）直接失败；
+//   5. 出生点净空：spawn(x, z) 到每个 box（地板除外）水平 AABB 的最小距离必须 >= 0.60 m。
+//      这条不是"防抄错"，是防**选点**：出生就贴着家具时 L2 的 clearance 从 t=0 触发，
+//      2026-11-08 那次 spawn=(0, 0.4) 到边几只有 0.273 m（实测起步 clearance 0.127 < 0.22）。
+//      0.60 = 告警线 0.22 的 2.7 倍；不是阈值，别拿它去改 C.CLEARANCE_WARN。
 //
 // 退出码：0 = 全部一致；1 = 有差异（差异逐条打到 stderr）。
 
@@ -146,7 +150,49 @@ if (!spawnMatch) {
   compareNum('agent.spawn.z', Number(spawn.z), Number(sz));
 }
 
-const compared = fixed.length * 2 + 4; // 每个盒子比 center+half，再加两个胶囊常数 + 出生点 x/z
+// ---------- 出生点净空（>= SPAWN_CLEAR_MIN）----------
+//
+// 口径：spawn 在 stored 系（physics.ts / three：x 右、y 上、z 朝屏幕外）的 (x, z) 到每个 box
+// 的 AABB 在 x/z 两轴上的水平距离，取最小值。地板（collider=plane）不算：它就在脚下，
+// 不是"家具"。盒子全是轴对齐的，距离就是逐轴夹一下再取模，不需要几何库。
+//
+// 为什么这里还要算一遍（Python 侧的 g1_world --check 也打 spawn_clearance）：两处读的东西
+// 不同——这边读 scene_room.json，那边读编译后的 MjModel 几何。谁跟场景分叉都会红，
+// 而且这边不依赖 Python/venv，CI 里只跑 node 也能拦住"出生点又贴回家具"。
+const SPAWN_CLEAR_MIN = 0.60;
+let spawnClearance = Infinity;
+let spawnNearest = null;
+if (Number.isFinite(Number(spawn.x)) && Number.isFinite(Number(spawn.z))) {
+  const sx = Number(spawn.x);
+  const sz = Number(spawn.z);
+  for (const box of boxes) {
+    if (String(box.collider || 'box') === 'plane') continue; // 地板不是家具
+    const c = Array.isArray(box.center) ? box.center.map(Number) : [];
+    const h = Array.isArray(box.half) ? box.half.map(Number) : [];
+    if (c.length !== 3 || h.length !== 3 || !c.every(Number.isFinite) || !h.every(Number.isFinite)) {
+      problems.push('盒子 "' + box.label + '" 的 center/half 不是 3 个有限数，算不出出生点净空');
+      continue;
+    }
+    const dx = Math.max(c[0] - h[0] - sx, 0, sx - (c[0] + h[0]));
+    const dz = Math.max(c[2] - h[2] - sz, 0, sz - (c[2] + h[2]));
+    const d = Math.hypot(dx, dz);
+    if (d < spawnClearance) {
+      spawnClearance = d;
+      spawnNearest = box;
+    }
+  }
+  if (spawnNearest === null) {
+    problems.push('一个非地板的盒子都没读到，出生点净空无法校验');
+  } else if (spawnClearance < SPAWN_CLEAR_MIN) {
+    problems.push(
+      '出生点净空不足：spawn=(' + fmt(sx) + ', ' + fmt(sz) + ') 到最近家具 "' +
+        spawnNearest.label + '"（id=' + spawnNearest.id + '）只有 ' +
+        spawnClearance.toFixed(3) + ' m < ' + SPAWN_CLEAR_MIN.toFixed(2) + ' m（出生就贴家具，L2 会从 t=0 触发；改出生点，不许改阈值）',
+    );
+  }
+}
+
+const compared = fixed.length * 2 + 5; // 每个盒子比 center+half，再加两个胶囊常数 + 出生点 x/z + 出生点净空
 
 // ---------- 结论 ----------
 
@@ -162,5 +208,10 @@ console.log(
 );
 console.log(
   '  范围：' + fixed.map((f) => f.label).join(' / ') + '；胶囊 r/' + fmt(capsule.capsule_r) + ' half/' + fmt(capsule.capsule_half),
+);
+console.log(
+  '  出生点：spawn=(' + fmt(spawn.x) + ', ' + fmt(spawn.z) + ')_three 净空=' +
+    spawnClearance.toFixed(3) + ' m（最近 "' + spawnNearest.label + '" id=' + spawnNearest.id +
+    '，门槛 ' + SPAWN_CLEAR_MIN.toFixed(2) + ' m）',
 );
 process.exit(0);
