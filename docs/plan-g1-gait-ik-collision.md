@@ -1,218 +1,132 @@
-# G1 三件事：步态 / IK / 场景碰撞 —— 交接方案
+# G1 三件事 v2：用已验证的轮子重写
 
-> 状态：草案 · 最后更新 2026-11-07 · 面向：接手的新会话（不需要读之前对话）
-> 基线提交：`918924d`（双身体契约 + G1 进演示台）。开工前先 `git pull`，确认 `git log -1` 是它或更新。
+> 状态：草案 · 最后更新 2026-11-07 · 面向：接手的新会话
+> 基线：`46144b0`。**本文件推翻 v1 的三处自研件**；v1 留在 git 历史：`git show 46144b0:docs/plan-g1-gait-ik-collision.md`。
 
-## 0. 五分钟上手
+## 0. 先认账：v1 有三处是自己造轮子
 
-```bash
-cd embodied-autonomy-stack/testbed
-node scripts/fetch-mujoco.mjs     # 模型 30 MB + wasm 到 public/mujoco/（不进仓库，换机器要重跑）
-npm run dev                       # http://localhost:5173/console.html
-# 右上角「身体」按钮切 G1 / 鲸鱼娘；?body=capsule 强制胶囊
-```
-
-已实测（本机 Edge headless，别重新猜）：
-
-| 项 | 数值 | 怎么来的 |
+| v1 的做法 | 问题 | v2 换成 |
 |---|---|---|
-| 模型高 | 1.34 m | `G1View.calibrate()` 量包围盒 |
-| 三角面 | 393k | 35 个可视 geom 求和 |
-| 自由度 | nq 36 / nv 35 / nu 29 / geom 72 | `G1Body.info` |
-| 加载 | 约 1 s（本机） | 页面日志 |
-| 站立 | 6 仿真秒不摔（rootZ 0.790→0.7916） | Node 探针 3000 步 |
-| 移动 | goto 1.9 m / 约 5 s | 浏览器 `__state()` 前后对比 |
+| 手写阻尼最小二乘 IK | 没人验证过；关节限位、姿态全靠手调 | **mink**：QP 形式的差分 IK，MuJoCo 生态，原生支持浮动基人形 |
+| 正弦 CPG 步态 | 脚会滑、没有平衡，本质是"看起来在走" | **G1 速度跟踪 RL 策略**（rsl_rl → ONNX），Unitree 官方仓库自己部署到真机 |
+| 浏览器 wasm 里跑 MuJoCo | 单线程、跑不了 ONNX、场景要在 JS 里重写一份 | **Python 权威仿真**（mujoco 4.0 + onnxruntime + mink），浏览器退回渲染器 |
 
-## 1. 现状锚点
+这三处不改，后面所有数字都是自娱自乐。
 
-### 1.1 文件职责
-
-| 文件 | 管什么 | 改它要注意 |
-|---|---|---|
-| `src/console/body.ts` | `BodyCommand` / `BodyState` / `Body` 合同 + `isBlocked` | **上层的唯一接口**，加字段要同步两个后端 |
-| `src/console/capsule-body.ts` | Rapier 胶囊实现（鲸鱼娘那一档） | 行为不要变，它是对照组 |
-| `src/console/g1-body.ts` | MuJoCo 加载、步进、钉姿态、29 关节读写 | 坐标转换与 pin 都在这 |
-| `src/console/g1-view.ts` | G1 渲染（geom 级） | 几何只能取模型数组，别读 STL |
-| `src/console/physics.ts` | Rapier 房间与家具（**手写坐标**） | 第 3 条工作线要把它改成读 `scene.ts` |
-| `src/console/main.ts` | 场景、L1/L3/L4、动作、相机、切换 | 运动段只调 `body.step()` |
-| `scripts/fetch-mujoco.mjs` | 模型/wasm 落盘 + `manifest.json` | 改了 MJCF 要重跑 |
-
-### 1.2 数据流（当前）
+## 1. 新架构：仿真搬回 Python，浏览器只负责画
 
 ```
-L1 vitals ─┐
-L3 affect ─┴→ L4 /plan (FastAPI) ─→ intent{action:goto, target}
-                                       │
-                        main.ts 算方向/速度 vx,vz（+yaw）
-                                       │
-                     BodyCommand{vx,vz,yaw}
-                       ├──────────────┴──────────────┐
-                 CapsuleBody.step              G1Body.step
-                 (Rapier 平动)          (qvel 注入 + 姿态钉死)
-                       └──────────── BodyState ────────┘
-                                │
-            L1 积分 / L3 刷新 / 遥测 / 遇障判定（同一份代码）
+┌──────────── 浏览器（Three.js，保留现有 UI / L1 / L3 / 鲸鱼娘）────────────┐
+│  BodyCommand{vx,vz,yaw} ──WS──▶                                          │
+│  BodyState{...} + geom{xpos,xmat} ◀──WS──                                │
+└──────────────────────────────────────────────────────────────────────────┘
+                                 │
+┌─────────────────── sim_server（Python，权威环）─────────────────────────┐
+│  mujoco 4.0  ← MJCF（模型 + 场景盒子，唯一真源）                          │
+│  onnxruntime ← policy.onnx（G1 速度跟踪策略，50 Hz）                      │
+│  mink        ← IK 任务（右手到目标点，按需触发，不与策略同时接管关节）      │
+│  FastAPI /plan（已有，L4）· WS /sim（新增，60 Hz 状态流）                  │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 1.3 三个断点（这次要补的）
+**契约不变**：`BodyCommand` / `BodyState` 仍是 `src/console/body.ts` 里那份，只把 G1 的实现
+从"浏览器里的 wasm 后端"换成"WS 客户端"。L1/L3/L4、遥测、遇障判定一行都不用改——
+当初抽这份契约就是为了今天能换实现。
 
-1. **腿不迈**：底盘速度是注入的，关节保持 `stand`，看起来像滑行。
-2. **没有 IK**：`G1Body.setJoint(name, rad)` 通道通，但没人调用；L4 只到“去哪”，不到“手怎么伸”。
-3. **两套几何**：家具碰撞在 Rapier（`physics.ts` 手写），MuJoCo 里只有地板 + 四面墙 → G1 会穿桌子。
+**降级**：`?sim=wasm` 仍跑现在这版浏览器内 MuJoCo（离线演示）；默认走 Python。
 
-## 2. 三条工作线
+## 2. 轮子清单（每个都能指到出处）
 
-顺序建议：**3 → 1 → 2**。理由：IK 的目标点（水杯/冰箱）和步态的碰撞都依赖场景单一真源；
-先做 3 只需改两处、风险最低，还能立刻让“撞桌子”变成可观测信号。
+| 用途 | 轮子 | 版本 / 许可 | 凭什么信它 |
+|---|---|---|---|
+| 物理 | `mujoco`（PyPI） | 4.0.0 / Apache-2.0 | 官方；与浏览器 wasm 同版本，模型行为一致 |
+| 策略推理 | `onnxruntime`（PyPI） | 稳定版 | 官方 ONNX 运行时；unitree 部署包里就是 ONNX |
+| IK | `mink`（`kevinzakka/mink`） | 最新 / MIT | 基于 MuJoCo 的 QP 差分 IK，任务/限位/约束齐全，README 有浮动基人形示例 |
+| 步态策略 | `unitreerobotics/unitree_rl_mjlab` | ★721 / 官方 | 官方 RL 仓库（基于 MuJoCo）；训练时**自动导出 `policy.onnx`** 供真机部署 |
+| 备选策略 | `google-deepmind/mujoco_playground` | 官方 | G1 全身跟踪 + 零样本 sim2real 部署层（同一 task layer 跑 `--mode=sim/real`） |
+| 模型 | `mujoco_menagerie/unitree_g1` | BSD-3 | 已在本仓库用着（1.34 m / 393k 三角，实测） |
+| 浏览器备选推理 | `onnxruntime-web` | npm `1.31.1` | 将来要把策略搬回浏览器时用；本次不需要 |
+| 真机 | `unitree_sdk2` + `cyclonedds` | — | 本项目不做，列出来只为说明策略有真机落点 |
 
-### 2.1 第 3 件：场景单一真源（先做，半天）
+## 3. 工作包（顺序即依赖）
 
-现在家具坐标在 `physics.ts` 里硬编码一遍，MuJoCo 里没有。改成一份数据、两个消费者。
+### P0 · sim_server（1 天，先做）
 
-**新增** `src/console/scene.ts`：
+- 新目录 `sim_server/`，复用 `server/.venv`；`requirements.txt` 加 `mujoco==4.0.0 mink onnxruntime`。
+- 模型：`testbed/public/mujoco/g1/`（或 `.assets/g1`）；场景盒子由 `scene.json` 生成（P1）。
+- 主循环：`mj_step` 2 ms × N；状态按 60 Hz 打包推 WS。
+- WS 协议：
+  - C→S：`{"t":<client_ts>,"cmd":{"vx":…,"vz":…,"yaw":…},"jointTargets":{…}|null}`
+  - S→C：`{"tSim":…,"x":…,"y":…,"z":…,"yaw":…,"speed":…,"blocked":…,"joints":{…},"geom":{"xpos":[…],"xmat":[…]},"contacts":N}`
+- 浏览器：`g1-body.ts` 内部换成 WS 客户端（保留 `Body` 接口 + 重连 + 超时降级）；`g1-view.ts` 不动。
+- **验收**：模型高 1.34±0.02 m；站立 30 s 漂移 ≤0.05 m；往返延迟 P95 ≤15 ms（本机）；60 s 无丢帧。
 
-```ts
-export interface SceneObject {
-  name: string;
-  /** three 坐标（y 上）；中心点，不是角点 */
-  pos: [number, number, number];
-  /** 半长（不是全长） */
-  half: [number, number, number];
-}
-export const SCENE: SceneObject[] = [
-  // 从 physics.ts 现有数值搬过来，一个都不许改（改了要说明为什么）
-];
-```
+### P1 · 场景单一真源（半天）
 
-- `physics.ts`：按 `SCENE` 建静态碰撞体，删掉硬编码。
-- `g1-body.ts`：`G1Body.create()` 里用它**生成 MJCF 文本**（不要手写第二份 XML）：
-  - 坐标映射：three `(x, y, z)` → MuJoCo `(x, -z, y)`（three 的 z 是 MuJoCo 的 -y，y 是 z）。
-  - MuJoCo `size` 是**半长**，正好对上 `half`。
-  - 把生成的 XML 写进 VFS（`m.FS.writeFile("/g1/room.xml", xml)`）再 `mj_loadXML`。
+- `scene.json`：家具名 + 中心 + 半长（数值全部搬自 `physics.ts`，一个都不改）。
+- `sim_server` 用它生成 MJCF 盒子；`physics.ts` 读同一份建 Rapier（鲸鱼娘兜底还在用）。
+- **验收**：G1 撞桌 ≤10 帧 `blocked=true`；胶囊同条件也 true；穿透 ≥ -2 cm。
 
-**验收**（缺一不可）：
+### P2 · 步态：装 ONNX 策略（1–2 天，含算力）
 
-| 判据 | 阈值 | 测法 |
-|---|---|---|
-| G1 撞桌被识别 | 连续 6 帧内 `BodyState.blocked === true` | 让 L4 goto 一个“桌子后面”的点 |
-| 胶囊同样被识别 | 同上 | `?body=capsule` 跑同一目标 |
-| 不穿透 | 角色根与盒面距离 ≥ -0.02 m | 每帧读 `qpos[0:3]` 与盒面做符号距离 |
-| 回归 | 现有 5 个动作、L4、遥测不坏 | 手点一遍 + 下文 4 节的脚本 |
+路线 A（首选）：
+1. clone `unitree_rl_mjlab`，按 README 训 G1 velocity（单卡，小时级）。
+2. 训练会导出 `policy.onnx` + `policy.onnx.data`，放进 `sim_server/policies/g1_velocity/`。
+3. 推理端**逐项照抄** `deploy/robots/g1/config/policy/velocity/*`：关节顺序、obs scale、历史帧数、动作 clip、`kp/kd`。错一项策略就躺平。
+4. 先用它们自带的 `scripts/play.py` 跑通，再换到我们的环；两边动作不一致 = obs 管线抄错了。
 
-**坑**：`room.xml` 里 `<include file="g1.xml"/>` 必须保留（模型本体）；生成的盒子放 `<worldbody>`；
-别把墙写成 `plane`（`plane` 无限大，会挡死）。
+路线 B（不训练）：Playground 的 G1 预训练 checkpoint；下载受限就写 TBD，不许用正弦顶替。
 
-### 2.2 第 1 件：步态（1–2 天）
+**验收**：命令 (0.5,0,0) 持续 5 s → 平均 ≥0.4 m/s 且不摔；30 s 连续；29 关节 0 超限；
+命令 (0,0,0) 时站立漂移 ≤0.1 m。任何一条不过，写负结果 + 原因。
 
-分两级，**必须先交 L0 再评估 L1**，不许跳过直接说“会走了”。
+**红线**：不许再自研步态。拿不到权重就交"没有步态"，接口留空。
 
-**L0 相位步态（visual）**：
+### P3 · IK：mink（1 天）
 
-- 相位 `φ += 2π f dt`（f 先用 1.2 Hz，标记 `@own` 并在文档写“手调未标定”）。
-- 29 个关节目标角 = `stand` 基线 + 正弦叠加（髋 pitch ±0.35、膝 0–0.5、踝 pitch 反相 ±0.2）。
-- 底盘**仍然注入**速度，但幅度跟随相位（`vx * (0.6 + 0.4*|sin φ|)`），至少不再匀速滑。
-- 采样点：`data.qpos` 里 29 个铰链角，对照 `model.jnt_range` 检查是否超限。
+- `mink.Configuration(model, data)`；任务：`FrameTask(right_wrist_yaw_link)` + `PostureTask`（回 stand）。
+- 目标点来自 `scene.json` 的水杯位姿。
+- 触发：L4 `intent:drink` → 停稳 → mink 解 2 s → 交位置执行器。
+- **状态机隔离**：`POLICY`（走路）与 `IK`（伸手）互斥，不同时写关节。
 
-**L1 物理推进（physical，允许失败）**：
+**验收**：末端误差 ≤0.01 m；关节 0 超限；单次 solve P95 ≤5 ms；触发到到位 ≤2.5 s。
 
-- 关掉 qvel 注入，只给关节目标角，让脚底摩擦推动。
-- 允许并预期“会摔”：记录摔倒时间、摔倒方向、是否自恢复。
-- **负结果必须写进文档**：这是本仓库的硬规矩（AGENTS.md §3）。
+## 4. 浏览器侧改动（尽量小）
 
-**验收**：
-
-| 判据 | L0 | L1 |
-|---|---|---|
-| 连续运行 | 30 s 不摔 | 记录到第一次摔倒的时间 |
-| 关节超限 | 0 次（`qpos` vs `jnt_range`） | 同 |
-| 位移 | ≥ 2 m / 30 s | 实测多少写多少，可以是 0 |
-| 足迹 | 每 0.8 s 至少一次足底接触（`data.ncon` + 脚 geom id） | 同 |
-| 帧预算 | 每帧物理 ≤ 2 ms | `performance.now()` 记录 P50/P95 |
-
-**API 备忘**（wasm 绑定已确认存在）：`data.ncon`、`data.contact.size()/get(i).geom1/geom2/dist`、
-`data.qpos`、`data.ctrl[a]`、`model.jnt_range`、`mj_kinematics`、`mj_forward`。
-
-### 2.3 第 2 件：IK（1–2 天）
-
-目标：把“手到水杯”从摆姿势变成解出来的 29 维角。
-
-**算法**：阻尼最小二乘（DLS），别引入库（没有 mink 的 JS 版）：
-
-```
-循环（最多 50 次）：
-  mj_kinematics + mj_comPos  → 更新 xpos/xquat
-  mj_jacBody(model, data, jacp, jacr, bodyId)   // jacp: 3×nv, jacr: 3×nv
-  e = targetPos - bodyPos(3)
-  Δq = Jᵀ (J Jᵀ + λ²I)⁻¹ e,   J 取 jacp 的 3×29（屏蔽 free joint 的 6 列）
-  q[7..35] += clamp(Δq, ±0.1)   // 每步限幅，别一步跳飞
-  mj_forward → 重算误差
-  停止条件：|e| < 0.02 或 50 次或 1.5 s
-```
-
-- 末端：`right_wrist_yaw_link` 的 body 位置（先不用 site，模型里右手的 site 需要确认存在）。
-- 目标点来自 `scene.ts` 的水杯位姿，**不要**再硬编码一份。
-- 接到 L4：intent `drink` → 目标点 → IK → `data.ctrl` → 等 1.5 s → 判定。
-
-**验收**：
-
-| 判据 | 阈值 |
+| 文件 | 改什么 |
 |---|---|
-| 末端误差 | ≤ 0.02 m（三次取中位） |
-| 关节超限 | 0 次 |
-| IK 单次耗时 | P95 ≤ 2 ms（wasm，主线程） |
-| 与胶囊对照 | 同一句“去喝水”，两边都记录到达时间；差值写进文档 |
+| `src/console/g1-body.ts` | 保留 `Body` 接口，内部换 WS 客户端（重连 + 超时降级 `?sim=wasm`） |
+| `src/console/main.ts` | 只改后端构造处 |
+| `src/console/g1-view.ts` | 不改：仍吃 `geomXpos/geomXmat`，数据来源变成 WS |
+| `docs/testbed.md` | 补"服务端仿真"一节：端口、协议、降级开关 |
 
-**坑**：`mj_jacBody` 的输出数组必须自己 new（`new Float64Array(3*nv)`），传 TypedArray 而不是普通数组；
-算完要 `mj_forward` 才能读到新的 `xpos`。
+## 5. 风险与负结果预案（先写下来，免得事后找补）
 
-### 2.4 顺手（不做也行，但要写“没做”）
+| 风险 | 预案 |
+|---|---|
+| 训练算力不够 / 权重拿不到 | 交"无步态"，`sim_server` 留 `policy=none`，写 TBD + 谁定 |
+| obs 管线与训练端不一致 | 先跑 `scripts/play.py` 对拍，同命令下轨迹应接近 |
+| WS 延迟抖动 | 本机测 P50/P95；跨机另算，不许混报 |
+| mink 与策略抢关节 | 状态机隔离（`POLICY` / `IK`） |
+| MJCF 与 Rapier 场景漂移 | 只认 `scene.json`，改场景两边同时生效 |
 
-- G1 的 5 个动作（坐 / 拿 / 喝水 / 被吓）：能用 IK 的用 IK，不能的在文档标关键帧。
-- 遥测卡片加一行：当前身体 + gait 模式（visual/physical）+ IK 状态。
+## 6. 提交与文档规矩（不变）
 
-## 3. 可复现验证（新增脚本）
+- 一件一提交；`sim_server/**`、`testbed/src/**` 改动要同提交更新 `docs/testbed.md` 与 `CHANGELOG.md`。
+- 数字带 n 与场景；没跑写 TBD；负结果照写（AGENTS.md §3）。
+- 新端口、新协议写进 `docs/interfaces.md` 或 `docs/testbed.md` 的接口表。
 
-新增 `testbed/scripts/check-g1.mjs`（照抄 `scripts/shot.mjs` 的 puppeteer 启动方式），跑 5 条断言：
+## 7. 只有两天的话
 
-| # | 断言 | 阈值 |
-|---|---|---|
-| 1 | 页面加载后 `__state().body === "g1"` | 40 s 内 |
-| 2 | 站立 10 s 漂移 | rootZ 变化 ≤ 0.05 m |
-| 3 | 走到桌边 | 位移 ≥ 1.5 m，`blocked` 出现过 |
-| 4 | IK 到水杯 | 误差 ≤ 0.02 m |
-| 5 | 切回胶囊再切回 G1 | 无报错、位置连续 |
+P0 + P1：先把"服务端权威仿真 + 单一场景"打通，浏览器一行契约都不改；
+步态和 IK 之后是插槽，不是重写。
 
-失败就红，别加 `|| true`。脚本要能被 CI 跳过（没有模型的环境），用环境变量 `SKIP_G1=1`。
+## 8. 给新会话的启动词
 
-## 4. 已知坑（照抄，别重踩）
-
-1. **网格顶点必须取模型的** `mesh_vert` / `mesh_face`。另读 STL 会把 `mesh_pos` 偏移算两遍，头浮在身子上方 0.4 m。
-2. **mesh 名 ≠ 文件名**：`waist_yaw_link` → `waist_yaw_link_rev_1_0.STL`；映射在 `manifest.json` 的 `meshFiles`。
-3. **group 2 才是可视**，group 3 是碰撞体（同一份 STL），全画会重影。
-4. `loadMujoco({ locateFile: p => base + p })`，wasm 从 `public/mujoco/mujoco.wasm` 取。
-5. `m.FS.mkdir` 要先建目录，再 `writeFile`。
-6. `mj_resetDataKeyframe` 之后必须 `mj_forward`，否则 `xpos` 是旧值。
-7. 姿态必须每子步钉死（`qpos[3:7]` 写朝向四元数、`qvel[3:6]=0`），否则 1 秒内倒地。
-8. 坐标：three `(x, y, z)` ↔ MuJoCo `(x, -z, y)`；盒子 `size` 是半长。
-9. 30 MB 模型不进仓库：`.assets/` 与 `testbed/public/mujoco/` 已在 `.gitignore`。
-10. 网络：`raw.githubusercontent.com` 会被 SSL 拦，用 `cdn.jsdelivr.net`（>50 MB 的单文件会被拒，例如 torso 的 2.5 MB 也可能命中包体积上限）或 `gh-proxy.com`；
-    下完用二进制 STL 规则校验：`size === 84 + 50 * faceCount`，否则 MuJoCo 报 “wrong size; perhaps this is an ASCII file”。
-
-## 5. 不做（边界，写清楚免得被当成承诺）
-
-- **不接 RL 训练**（Isaac Lab / mjlab / unitree_rl_lab）：那是另一条栈，不进浏览器。
-- **不改 L4 服务接口**（`server/main.py` 的 schema）：三条工作线都在前端闭环。
-- **不为好看调阈值**：`isBlocked` 的 0.35、`STALE_AGE_MS` 的 1500 都是判据，动机要可核对。
-- **不把滑行叫成步态**：L0 交的是“相位驱动 + 关节在动”，不是“会走路”。
-
-## 6. 提交与文档
-
-- 一个提交一件事；`testbed/src/**` 或 `testbed/package.json` 改动必须在同一提交里更新
-  `docs/testbed.md` 与 `CHANGELOG.md`（CI 的 `doc-sync` 会红）。
-- 每条结论带 n 与场景（例：`3/3 次到达，误差 0.8/1.1/0.6 cm`），不许写“显著提升”。
-- 跑不完全部就写“没跑”，不要留假数据。
-
-## 7. 只有两小时的话
-
-只做第 3 件的前半：把 `physics.ts` 的家具搬进 `scene.ts`，两处消费，跑通“撞桌 → blocked”。
-这一步不改变任何现有行为，却让后面两件事有了地基。
+```text
+仓库：E:\桌面\具身智能研究\embodied-autonomy-stack（main，基线 46144b0 或更新）
+先读 docs/plan-g1-gait-ik-collision.md（v2 方案），再读 docs/testbed.md「双身体」一节。
+按 P0 → P1 → P2 → P3 做。不要自研 IK、不要自研步态：IK 用 mink，步态用 unitree_rl_mjlab 导出的 policy.onnx。
+每完成一个 P：跑验收表，把实测数字写进 docs/testbed.md，同一提交更新 CHANGELOG。
+拿不到策略权重就如实写"没有步态"，不要用正弦 CPG 冒充。
+```

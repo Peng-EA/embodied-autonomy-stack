@@ -183,7 +183,7 @@ L3 情绪（只改偏好）
 
 ## 下一步
 
-- G1 的三件事（步态 / IK / 场景碰撞）见 [plan-g1-gait-ik-collision.md](plan-g1-gait-ik-collision.md)。
+- G1 的下一步见 [plan-g1-gait-ik-collision.md](plan-g1-gait-ik-collision.md)（v2：服务端仿真 + ONNX 步态策略 + mink 求 IK，替换自研件）。
 - `revalidate` 策略（"过期但当前感知仍然安全就采纳"）——这是本版阴性结果直接指向的修复。
 - 移动障碍场景（时间变化带来危险，而不只是目标移动）。
 - 抢占在 v0.2 场景里没有触发过一次（`b2` 与 `full` 数字完全相同），需要专门构造触发条件。
