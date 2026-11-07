@@ -51,6 +51,8 @@ sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈�
 | `env/scene.xml` | 场景：平面底盘、横在中间的墙、充电桩（只做视觉，不参与碰撞） |
 | `env/scene_room.json` | **房间场景的单一真源**（2026-11-08 从 `sim_server/` 搬来）：9 件家具的名字/中心/半长（逐位抄自 `testbed/src/console/physics.ts`）、胶囊代理、出生点、`ik_targets`。`sim_server` 与 `sim` 都读这一份；`node scripts/check-scene-parity.mjs` 双向比对 22 项，`node scripts/check-layer-deps.mjs` 禁止 `sim/**` 反向 import `sim_server` |
 | `env/world.py` | 仿真器包装：位姿/速度/**raycast 感知**/接触力；换真机只改这一层 |
+| `env/g1_sim.py` | **G1 人形内核（底座）**：MJCF 载入 + 2 ms 定步长、PoseHold（kp=500）、joystick ONNX 策略（103 obs / 50 Hz / kp=75）。2026-11-08 从 `sim_server/` 抽来，两边共用同一份（`sim_server` 依赖 `sim`，反之禁止） |
+| `env/scene_room.py` | 读 `env/scene_room.json` 并把 stored(y-up) 换成 MuJoCo(z-up)，只换一次 |
 | `l1_homeostasis/` | 电量/温度/应力 → `homeostatic_broadcast`（20Hz 采样） |
 | `l2_reflex/` | 射线间隙/接触力 → `reflex_override`（迟滞 + 冷却），**无许可、直接置位** |
 | `l3_affect/` | 情绪向量 → `affect_vector`、`goal_candidate`，并**真的调制速度** |

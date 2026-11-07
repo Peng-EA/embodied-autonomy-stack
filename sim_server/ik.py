@@ -4,10 +4,10 @@
 
 - 不写阻尼最小二乘、不手写雅可比。解算只有一条路：`mink.solve_ik`（QP 形式差分 IK，
   solver 用 osqp；依赖装法见 sim_server/README.md §1）。
-- 本文件**不写 ctrl**。它只产出「一组关节角」，交给位置执行器（stand.py 的 PoseHold，
+- 本文件**不写 ctrl**。它只产出「一组关节角」，交给位置执行器（sim/env/g1_sim.py 的 PoseHold，
   kp=500 的 position 执行器）去执行 —— 所以 IK 期间机器人是「站着、伸一只手」，不是被 IK
   直接写力矩（那就跟 HOLD 抢了同一条通道）。
-- 目标点只有一份真源：scene.json 的 `ik_targets`，换算在 scene.py 做一次，这里只读
+- 目标点只有一份真源：scene.json 的 `ik_targets`，换算在 sim/env/scene_room.py 做一次，这里只读
   `IkTarget.mujoco_point`。本文件不出现任何目标坐标常数。
 
 任务（任务书原文）：`FrameTask(right_wrist_yaw_link)` + `PostureTask`（回 keyframe stand）。
@@ -39,9 +39,8 @@ import numpy as np
 
 import mink
 
-from .scene import IkTarget
-from .stand import PoseHold
-from .world import World
+from sim.env.g1_sim import PoseHold, World
+from sim.env.scene_room import IkTarget
 
 # ---- 任务定义（任务书：FrameTask(right_wrist_yaw_link) + PostureTask 回 stand）----
 IK_FRAME = "right_wrist_yaw_link"

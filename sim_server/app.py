@@ -8,7 +8,7 @@
   S -> C  {"tSim", "x", "y", "z", "yaw", "speed", "blocked", "joints",
            "geom": {"xpos": [...], "xmat": [...]}, "contacts": <n>, "mode": "HOLD"|"POLICY"|"MIMIC"}
 
-- x/y/z 是 three 右手系（y 向上），来自 sim_server.world 的转换；浏览器不用再翻。
+- x/y/z 是 three 右手系（y 向上），来自 sim/env/g1_sim.py 的 World 转换；浏览器不用再翻。
 - joints 是 29 个铰链关节名 -> 角度（rad），BodyState.joints 同构。
 - geom 每帧给全部 geom 的 xpos(3n) / xmat(9n)，three 系；names 只在连接后的第一条消息里给一次
   （n 不变，没必要 60 Hz 重复）。
@@ -51,8 +51,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from .modes import ModeController
-from .stand import PoseHold
-from .world import STEPS_PER_TICK, TICK_HZ, World
+from sim.env.g1_sim import PoseHold, STEPS_PER_TICK, TICK_HZ, World
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8788

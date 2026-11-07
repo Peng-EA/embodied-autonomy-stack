@@ -104,8 +104,8 @@ stdout 最后四行保持原样，方便复跑比对）；2 = `--walk` / `--mimi
 
 | 模式 | 谁在控 | 增益 | 实测 |
 |---|---|---|---|
-| **HOLD** | `stand.py` 的 pose hold（目标 = keyframe `stand`） | kp=500 / kd=模型临界阻尼（4.54–16.20） | 30 s 漂 0.0002 m |
-| **POLICY** | `policies/g1_joystick.py` 的 ONNX 速度跟踪（obs 103 维，50 Hz，每控 10 个 2 ms 物理步） | kp=75 / kd=2（训练端增益） | (0.5,0,0) 5 s 0.553 m/s；30 s 0.576 m/s / 16.50 m / z_min 0.725 |
+| **HOLD** | `sim/env/g1_sim.py` 的 PoseHold（目标 = keyframe `stand`） | kp=500 / kd=模型临界阻尼（4.54–16.20） | 30 s 漂 0.0002 m |
+| **POLICY** | `sim/env/g1_sim.py` 的 G1JoystickPolicy（ONNX 速度跟踪）（obs 103 维，50 Hz，每控 10 个 2 ms 物理步） | kp=75 / kd=2（训练端增益） | (0.5,0,0) 5 s 0.553 m/s；30 s 0.576 m/s / 16.50 m / z_min 0.725 |
 
 **权重**：`.tmp/loco/g1mp/g1_policy.onnx`，903,543 B，md5 `3dc6c4d61fd39588f57b4e2049e9a15f`。
 DeepMind `mujoco_playground` 的 G1 joystick（速度跟踪）ONNX 导出，**不是我们训的**；
@@ -368,7 +368,7 @@ dance 那段不删、留成 `--mimic-clip` 的显式选项，让负结果可复�
 | kd | 4.54–16.20 N·m·s/rad（逐关节） | MJCF 只给 `dampratio="1"`（临界阻尼），MuJoCo 编译时按有效惯量折算，读 `model.actuator_biasprm[:,2]` 的负值 |
 | ctrlrange | 继承关节限位，如 `left_hip_pitch` = [-2.5307, 2.8798] | `inheritrange="1"`，读 `model.actuator_ctrlrange` |
 | POLICY 的 kp/kd | 75 / 2 | 训练端 `g1_mjx_feetonly.xml`：`<position kp="75">` + `<joint damping="2">`；只在 POLICY 接管期间覆盖，HOLD 的 500 一个数都不动 |
-| 地面 | plane, size `0 0 0.05` | `g1.xml` **没有地面**（空跑 30 s 实测 `ncon=0`、机身自由落体到 z=-4414）；`room.xml` 第 4 行与 `scene.xml` 第 19 行都是这一行，`world.py` 用 `MjSpec` 补同参数的一块 |
+| 地面 | plane, size `0 0 0.05` | `g1.xml` **没有地面**（空跑 30 s 实测 `ncon=0`、机身自由落体到 z=-4414）；`room.xml` 第 4 行与 `scene.xml` 第 19 行都是这一行，`sim/env/g1_sim.py` 用 `MjSpec` 补同参数的一块 |
 
 PD 由 MuJoCo 的位置执行器完成（gain = kp，bias = -kp·q - kd·q̇），力再被 `forcerange` 截断；
 Python 侧不另写一遍力矩。
@@ -377,14 +377,14 @@ Python 侧不另写一遍力矩。
 
 | 文件 | 干什么 |
 |---|---|
-| `world.py` | 载入 MJCF（+ 地板）、`mj_step` 2 ms、`step(n)` / `state()`（BodyState 同构）、`height()` / `drift()`；**mj(z-up) → three(y-up) 的转换只在这里** |
-| `stand.py` | 读 keyframe + `ctrlrange` + kp/kd，PD 保位；`jointTargets` 覆盖与 clip |
+| `sim/env/g1_sim.py` | **G1 内核（2026-11-08 从本目录抽到 `sim/` 底座）**：载入 MJCF（+ 地板）、`mj_step` 2 ms、PoseHold、G1JoystickPolicy、`step(n)` / `state()`（BodyState 同构）、`height()` / `drift()`；**mj(z-up) → three(y-up) 的转换只在这里** |
+| ~~`stand.py`~~ | 已并入 `sim/env/g1_sim.py`（PoseHold） |
 | `app.py` | FastAPI + WS `/sim` + `/health`；定步长循环只 `publish` 最新快照（**不做 WS I/O**），每客户端一条独立发送协程按 seq 取最新（慢客户端合并中间帧，不阻塞物理） |
 | `selfcheck.py` | headless 跑 N 秒，打印四行指标（`--walk` 打 P2b 六项 / `--mimic` 七项 / `--ik` 五项），exit code 0/1 |
 | `ik.py` | **IK 的解算封装**：`mink.Configuration` + `FrameTask(right_wrist_yaw_link)` + `PostureTask`（回 stand）、等约束冻基座/腿、`frame→关节角`、`actuator_targets`（按关节名映射，不按下标猜）。**不自研 IK** |
-| `scene.py` | 读场景单一真源 **`../sim/env/scene_room.json`**（`boxes` = physics.ts，parity 脚本逐条比 + **P3 的 `ik_targets`**，坐标写 stored 系），做 stored→mj 换算；默认路径由 `__file__` 推出仓库根（不看 cwd），显式 `load_scene(path=...)` 仍可换一份 |
+| `sim/env/scene_room.py` | 读场景单一真源 **`sim/env/scene_room.json`**（`boxes` = physics.ts，parity 脚本逐条比 + **P3 的 `ik_targets`**，坐标写 stored 系），做 stored→mj 换算；默认路径由 `__file__` 推出仓库根（不看 cwd），显式 `load_scene(path=...)` 仍可换一份 |
 | `modes.py` | **HOLD/POLICY 状态机**：滞回判据、0.2 s ramp（目标 + kp + kd）、回 HOLD 前的刹车；所有 `ctrl` 都从这里出 |
-| `policies/g1_joystick.py` | ONNX 推理封装：103 维 obs 组装（照训练端）、50 Hz 控制、动作→29 个位置目标、权重 md5 校验 |
+| ~~`policies/g1_joystick.py`~~ | 已并入 `sim/env/g1_sim.py` 的 G1JoystickPolicy：103 维 obs 组装（照训练端）、50 Hz 控制、动作→29 个位置目标、权重 md5 校验 |
 | `policies/g1_mimic.py` | **MIMIC 的动作源**：`CLIPS` 注册表（clip / 字节数 / sha256 / 帧数）、154 维 obs 组装、每控制帧两调推理、参考帧数二分探出、动作→29 个位置目标 |
 | `policies/SPIKE.md` | 2026-11-07 的选型探路记录：为什么是这个权重、kp=500 必摔、零命令站不住（含实测表） |
 

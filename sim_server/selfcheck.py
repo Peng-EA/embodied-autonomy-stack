@@ -83,8 +83,7 @@ from .modes import (
     RAMP_S,
     ModeController,
 )
-from .stand import PoseHold
-from .world import STEPS_PER_TICK, TICK_DT_SIM, TICK_HZ, World
+from sim.env.g1_sim import PoseHold, STEPS_PER_TICK, TICK_DT_SIM, TICK_HZ, World
 
 # ---- P0a 判据（一个数都别动）----
 HEIGHT_MIN, HEIGHT_MAX = 1.32, 1.36

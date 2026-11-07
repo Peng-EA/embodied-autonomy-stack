@@ -1,13 +1,13 @@
 """策略/动作源。两条腿，各管一件事，谁都不许冒充对方：
 
-- g1_joystick.py —— POLICY：ONNX **速度跟踪**（摇杆走路，DeepMind mujoco_playground 导出）。
+- sim/env/g1_sim.py（G1JoystickPolicy）—— POLICY：ONNX **速度跟踪**（摇杆走路，DeepMind mujoco_playground 导出）。
 - g1_mimic.py    —— MIMIC：ONNX **动作跟踪**（播一段现成参考动作，HF exptech/g1-moves，CC-BY-4.0）。
                     不是我们训的，也不是走路：同一时刻只有一条腿能写关节（见 modes.py）。
 
 spike_g1_onnx.py 是 S-loco 的探路脚本，不进运行时。
 """
 
-from .g1_joystick import (
+from sim.env.g1_sim import (
     ACTION_SCALE,
     CTRL_HZ,
     CTRL_SUBSTEPS,

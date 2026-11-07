@@ -2,9 +2,9 @@
 
 两个模式各自只干一件事，谁都不许冒充对方：
 
-- **HOLD**   pose hold（stand.py）：29 个位置执行器钉在 keyframe `stand`，kp=500 临界阻尼。
+- **HOLD**   pose hold（sim/env/g1_sim.py）：29 个位置执行器钉在 keyframe `stand`，kp=500 临界阻尼。
              30 s 实测漂 0.2 mm —— **站得住是它的功劳，不是策略的**。
-- **POLICY** G1 joystick ONNX 速度跟踪（policies/g1_joystick.py）：kp=75 / kd=2，
+- **POLICY** G1 joystick ONNX 速度跟踪（sim/env/g1_sim.py）：kp=75 / kd=2，
              50 Hz 推理、每控 10 个 2 ms 物理步，动作→位置目标。
 
 为什么必须两个模式，这是实测结论不是偏好：
@@ -128,9 +128,8 @@ import mujoco
 import numpy as np
 
 from .ik import RIGHT_ARM_JOINTS, IkSolver, actuator_targets, frame_point_mj
-from .policies.g1_joystick import CTRL_SUBSTEPS, POLICY_KD, POLICY_KP, G1JoystickPolicy
 from .policies.g1_mimic import G1MimicPolicy
-from .stand import PoseHold
+from sim.env.g1_sim import CTRL_SUBSTEPS, POLICY_KD, POLICY_KP, G1JoystickPolicy, PoseHold
 
 HOLD = "HOLD"
 POLICY = "POLICY"

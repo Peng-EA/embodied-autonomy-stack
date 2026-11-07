@@ -1,4 +1,8 @@
-mujoco>=3.2,<4
+# G1 仿真内核 sim/env/g1_sim.py 用的版本与 server/.venv 对齐（mujoco 4.0.0 是拆分包：
+# mujoco-core 必须一起装，否则 import 会报 core bindings missing）
+mujoco==4.0.0
+# G1 策略推理（G1JoystickPolicy / G1MimicPolicy 懒加载 onnxruntime，只有真进模式才 import）
+onnxruntime>=1.31
 numpy>=1.26
 pyyaml>=6.0
 # 探针（sim/test_vla_l4.py）调用 Ollama 用；主闭环不依赖它
