@@ -42,7 +42,9 @@
 | 物理 | `mujoco`（PyPI） | 4.0.0 / Apache-2.0 | 官方；与浏览器 wasm 同版本，模型行为一致 |
 | 策略推理 | `onnxruntime`（PyPI） | 稳定版 | 官方 ONNX 运行时；unitree 部署包里就是 ONNX |
 | IK | `mink`（`kevinzakka/mink`） | 最新 / MIT | 基于 MuJoCo 的 QP 差分 IK，任务/限位/约束齐全，README 有浮动基人形示例 |
-| 步态策略 | `unitreerobotics/unitree_rl_mjlab` | ★721 / 官方 | 官方 RL 仓库（基于 MuJoCo）；训练时**自动导出 `policy.onnx`** 供真机部署 |
+| **动作策略（现成）** | HF `exptech/g1-moves` | CC-BY-4.0 / 60 段 | 每段带 `policy_154/*.onnx` + `agent.yaml` + `env.yaml`（mjlab 训练）；29-DOF EDU |
+| **动作策略（现成）** | GH `abtonmoy/ai_hackathon_calhacks` | 154 obs → 29 act | `deploy.yaml` 直接给出 obs 布局/增益/动作缩放，drop-in `unitree_rl_mjlab` deploy |
+| 步态策略（loco） | `unitreerobotics/unitree_rl_mjlab` | ★721 / 官方 | 官方 RL 仓库（基于 MuJoCo）；训练时自动导出 `policy.onnx` 供真机部署 |
 | 备选策略 | `google-deepmind/mujoco_playground` | 官方 | G1 全身跟踪 + 零样本 sim2real 部署层（同一 task layer 跑 `--mode=sim/real`） |
 | 模型 | `mujoco_menagerie/unitree_g1` | BSD-3 | 已在本仓库用着（1.34 m / 393k 三角，实测） |
 | 浏览器备选推理 | `onnxruntime-web` | npm `1.31.1` | 将来要把策略搬回浏览器时用；本次不需要 |
@@ -67,20 +69,53 @@
 - `sim_server` 用它生成 MJCF 盒子；`physics.ts` 读同一份建 Rapier（鲸鱼娘兜底还在用）。
 - **验收**：G1 撞桌 ≤10 帧 `blocked=true`；胶囊同条件也 true；穿透 ≥ -2 cm。
 
-### P2 · 步态：装 ONNX 策略（1–2 天，含算力）
+### P2 · 步态与动作：装现成 ONNX 策略
 
-路线 A（首选）：
-1. clone `unitree_rl_mjlab`，按 README 训 G1 velocity（单卡，小时级）。
-2. 训练会导出 `policy.onnx` + `policy.onnx.data`，放进 `sim_server/policies/g1_velocity/`。
-3. 推理端**逐项照抄** `deploy/robots/g1/config/policy/velocity/*`：关节顺序、obs scale、历史帧数、动作 clip、`kp/kd`。错一项策略就躺平。
-4. 先用它们自带的 `scripts/play.py` 跑通，再换到我们的环；两边动作不一致 = obs 管线抄错了。
+先说清一件事，免得又走偏：**现成权重都是 mimic（跟踪某段动作），没有一个是速度跟踪（摇杆走路）**。
+两者用途不同，必须分开做。
 
-路线 B（不训练）：Playground 的 G1 预训练 checkpoint；下载受限就写 TBD，不许用正弦顶替。
+#### P2a · Mimic 动作库（可立即落地，零训练）
 
-**验收**：命令 (0.5,0,0) 持续 5 s → 平均 ≥0.4 m/s 且不摔；30 s 连续；29 关节 0 超限；
-命令 (0,0,0) 时站立漂移 ≤0.1 m。任何一条不过，写负结果 + 原因。
+已核实的两个来源（2026-11-07 逐个点开确认过）：
 
-**红线**：不许再自研步态。拿不到权重就交"没有步态"，接口留空。
+| 来源 | 内容 | 许可 |
+|---|---|---|
+| **HF `exptech/g1-moves`** | 60 段（dance 28 / karate 27 / bonus 5），G1 EDU 29-DOF，MOVIN TRACIN 动捕；每段带 `capture/` `retarget/` `training/` 与 **`policy_154/*.onnx`（2.87 MB）+ `agent.yaml` + `env.yaml`**；mjlab 训练（`experiment_name: g1_tracking`） | CC-BY-4.0 |
+| **GitHub `abtonmoy/ai_hackathon_calhacks`** | `deploy_config/jab/`：`policy.onnx`（**154 obs 进、29 action 出，归一化烧在模型里**）+ `deploy.yaml`（增益/动作缩放/默认姿态/obs 布局/关节映射）+ `jab.npz`（参考动作，50 Hz），drop-in `unitree_rl_mjlab` 的 `deploy/robots/g1` | 仓库自带（用前看一眼 LICENSE） |
+
+**这两个包的价值不在"会走路"，而在于它们把 obs 管线写成了文件**：
+`deploy.yaml` / `env.yaml` 就是权威定义（关节顺序、scale、history、action clip、kp/kd）。
+以前最大的风险是"obs 抄错一项策略就躺平"，现在照文件配即可，不用猜。
+
+做法：
+1. `sim_server/policies/` 放 2–3 个片段（先挑 `bonus` 里短的，别一上来拉 60 段 ×2.8 MB）。
+2. 读 `deploy.yaml` 生成 obs 组装器；`onnxruntime` 推理 50 Hz；动作 → 位置执行器。
+3. L4 接法：`intent: gesture/move` → 选片段 → 播放 → 结束回 `stand`。**与 goto 分开**。
+
+**已实测（我下载了一段真跑了，不是看文档）**：`dance/J_Dance0_StepTouch/policy_154`（2.87 MB）：
+
+| 项 | 实测 |
+|---|---|
+| 输入 | `obs [1,154]` **+ `time_step [1,1]`**（第二路输入文档里没写，漏了会直接报错） |
+| 输出 | 7 路：`actions [1,29]`、`joint_pos/vel [1,29]`、`body_pos_w [1,14,3]`、`body_quat_w [1,14,4]`、lin/ang vel |
+| 参考根位姿 | `[−0.014, −0.023, 0.819]`（骨盆高 0.82，和我们的 MJCF 一致） |
+| 推理耗时 | **0.032 ms/次**（单线程 CPU，onnxruntime 1.31.1） |
+
+注意：输出里的 `body_pos_w` 是**参考动作的 14 个身体位姿**，等于每条片段自带一条可回放的参考轨迹——
+这意味着"参考轨迹 + 物理跟踪"这条路可直接走，不需要我们再解一段运动学。
+
+**验收**：选定片段跑 3 次，与数据集自带 `*_policy.mp4` 对比姿态序列（抽 5 帧做关节角 RMSE）；
+29 关节 0 超限；推理 P95 ≤1 ms（实测 0.032 ms）；片段结束后 2 s 内回 stand 且不摔。
+
+#### P2b · Locomotion（goto 要用的，仍需训练或另找权重）
+
+- 路线 A：`unitree_rl_mjlab` 训 velocity tracking（单卡，小时级）→ `policy.onnx`。
+- 路线 B：`mujoco_playground` 的 G1 预训练 checkpoint（下载是否可用未验证，标 TBD）。
+- **在 P2b 交付前，`goto` 只能用现有的底盘速度注入（= 滑行）**，UI 上必须标注，不许说成"走路"。
+
+**验收**：命令 (0.5,0,0) 持续 5 s → 平均 ≥0.4 m/s 且不摔；30 s 连续；0 超限；(0,0,0) 站立漂移 ≤0.1 m。
+
+**红线**：不许再自研步态；拿不到 loco 权重就交"没有走路"，接口留空，别用正弦 CPG 冒充。
 
 ### P3 · IK：mink（1 天）
 
@@ -104,7 +139,8 @@
 
 | 风险 | 预案 |
 |---|---|
-| 训练算力不够 / 权重拿不到 | 交"无步态"，`sim_server` 留 `policy=none`，写 TBD + 谁定 |
+| **loco 权重**拿不到（mimic 已有现成的） | 交"没有走路"：`goto` 仍是滑行并在 UI 标注；`sim_server` 留 `policy=none` |
+| mimic 策略与我们的 MJCF 不一致（几何/密度/增益） | 先跑数据集自带的 `*_policy.mp4` 对照；对不上就换 `env.yaml` 里的执行器参数再试 |
 | obs 管线与训练端不一致 | 先跑 `scripts/play.py` 对拍，同命令下轨迹应接近 |
 | WS 延迟抖动 | 本机测 P50/P95；跨机另算，不许混报 |
 | mink 与策略抢关节 | 状态机隔离（`POLICY` / `IK`） |
