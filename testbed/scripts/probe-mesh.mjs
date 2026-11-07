@@ -3,11 +3,15 @@
 // 不渲染、不开浏览器，只算世界矩阵与包围盒 —— 界面画的东西就是这批顶点。
 //
 // 用法（仓库根目录）：
-//   node testbed/scripts/probe-mesh.mjs              # 连 sim_server（没起就自己 spawn）取一帧
+//   node testbed/scripts/probe-mesh.mjs              # 自选空闲端口（8790 起）自起 sim_server 取一帧
 //   node testbed/scripts/probe-mesh.mjs --frame f.json   # 用存下来的首帧（不需要服务端）
-//   node testbed/scripts/probe-mesh.mjs --no-spawn --url ws://127.0.0.1:8788/sim
+//   node testbed/scripts/probe-mesh.mjs --port 8788       # attach 已存在服务（仅观测，exit 2）
 //
-// 判据（不达标 exit 1）：
+// P0f（端口隔离）：默认从 8790 起自选空闲端口、自起 sim_server、取完一帧就关掉（lib/sim-server.mjs）；
+// 输出打印 port=实际端口 与 attached_to=self。只有显式 --port/--url 才 attach 已存在服务。
+// 事故背景：8788 上有人驱动机器人时旧探针会接上去，把别人的状态当成自己的基线。
+//
+// 判据（不达标 exit 1；只对隔离运行 / --frame 生效）：
 //   mesh_count       >= 30      真正摆出来的网格数（按网格名去重）
 //   g1_bbox_height   1.30–1.36  整机包围盒高（m；mj 的 z = three 的 y）
 //   另报告 head_top_y / geoms / missing / 全部网格 scale
@@ -24,7 +28,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { G1BodyWs, DEFAULT_WS_URL } from '../src/console/g1-body-ws.ts';
+import { G1BodyWs } from '../src/console/g1-body-ws.ts';
 import {
   bakeMeshPositions,
   composeWorldBounds,
@@ -32,16 +36,17 @@ import {
   threeToMjMat,
   threeToMjPos,
 } from '../src/console/g1-mesh.ts';
-import { ROOT, ensureServer, killQuiet, wsCtor } from './lib/sim-server.mjs';
+import { EXIT, PortAcquireError, ROOT, acquireSimServer, serverLine, wsCtor } from './lib/sim-server.mjs';
 
 const G1_DIR = path.join(ROOT, 'testbed', 'public', 'mujoco', 'g1');
 const LIMITS = { meshCount: 30, heightMin: 1.3, heightMax: 1.36 };
 
 function parseArgs(argv) {
-  const out = { url: DEFAULT_WS_URL, spawn: true, frame: null, json: false };
+  const out = { url: null, port: null, spawn: true, frame: null, json: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--url') out.url = String(argv[++i]);
+    else if (a === '--port') out.port = Number(argv[++i]);
     else if (a === '--frame') out.frame = String(argv[++i]);
     else if (a === '--no-spawn') out.spawn = false;
     else if (a === '--json') out.json = true;
@@ -54,25 +59,26 @@ function fmt(x, digits = 4) {
   return Number.isFinite(x) ? x.toFixed(digits) : 'NaN';
 }
 
-/** 取一帧（含 geom.mesh / geom.meshMeta）：优先 --frame，否则连服务端 */
+/** 取一帧（含 geom.mesh / geom.meshMeta）：优先 --frame，否则自起/attach 服务端 */
 async function loadFrame(args) {
   if (args.frame) {
     const raw = JSON.parse(readFileSync(args.frame, 'utf8'));
     const geom = raw?.geom ? raw.geom : raw?.snapshot?.geom;
     if (!geom) throw new Error('--frame 里没有 geom（要一条完整状态帧，含首帧的 meshMeta）');
-    return { geom, source: 'frame=' + args.frame, child: null };
+    return { geom, source: 'frame=' + args.frame, server: null };
   }
 
-  const server = await ensureServer(args.url, args.spawn);
+  const server = await acquireSimServer({ url: args.url, port: args.port, allowSpawn: args.spawn, label: 'probe-mesh' });
+  console.log(serverLine(server));
   const ws = wsCtor();
   let body = null;
   try {
-    body = await G1BodyWs.create(args.url, { WebSocketCtor: ws.ctor, rttEveryMs: 0 });
+    body = await G1BodyWs.create(server.url, { WebSocketCtor: ws.ctor, rttEveryMs: 0 });
     const frame = body.frame();
     if (!frame?.geom) throw new Error('首帧没有 geom');
-    return { geom: frame.geom, source: 'ws=' + args.url + ' tSim=' + frame.tSim, child: server.child };
+    return { geom: frame.geom, source: 'port=' + server.port + ' tSim=' + frame.tSim, server };
   } catch (e) {
-    killQuiet(server.child);
+    server.close();
     throw e;
   } finally {
     body?.close();
@@ -82,12 +88,18 @@ async function loadFrame(args) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('node testbed/scripts/probe-mesh.mjs [--url ws://127.0.0.1:8788/sim] [--no-spawn] [--frame f.json] [--json]');
-    return 0;
+    console.log('node testbed/scripts/probe-mesh.mjs [--port N | --url ws://127.0.0.1:8788/sim] [--no-spawn] [--frame f.json] [--json]');
+    console.log('  默认：自选空闲端口（8790 起）自起 sim_server，取一帧就关掉；--port/--url 才 attach 已存在服务（仅观测，exit 2）');
+    return EXIT.pass;
   }
 
-  const { geom, source, child } = await loadFrame(args);
+  let server = null;
   try {
+    const frame = await loadFrame(args);
+    server = frame.server;
+    const geom = frame.geom;
+    const source = frame.source;
+
     const names = geom.names ?? [];
     const meshOf = geom.mesh ?? [];
     const meta = geom.meshMeta ?? null;
@@ -172,7 +184,8 @@ async function main() {
           ' geoms=' + b.geoms + ' ngeom=' + ngeom +
           ' missing=' + missing.length + (missing.length ? '(' + missing.slice(0, 3).join(',') + ')' : '') +
           ' y_min=' + fmt(b.zMin) + ' triangles=' + triangles +
-          ' scale_all_1=' + unitScale,
+          ' scale_all_1=' + unitScale +
+          (server ? ' port=' + server.port + ' attached_to=' + (server.attached ? 'existing' : 'self') : ''),
       );
       console.log('source=' + source);
     }
@@ -184,20 +197,39 @@ async function main() {
     }
     if (missing.length) fails.push('缺 ' + missing.length + ' 块网格：' + missing.slice(0, 5).join(', '));
     if (!unitScale) fails.push('有网格 scale != 1（烘焙公式需要按 geom 维度缩放，先看 meshMeta）');
-    if (fails.length) {
-      for (const f of fails) console.error('FAIL: ' + f);
-      return 1;
-    }
-    return 0;
+    for (const f of fails) console.error('FAIL: ' + f);
+    return verdictFor(server, fails);
   } finally {
-    killQuiet(child);
+    server?.close();
   }
+}
+
+/** --frame 与隔离运行给 PASS/FAIL；attach 到别人的服务只给观测（exit 2） */
+function verdictFor(server, fails) {
+  if (!server || !server.attached) {
+    console.log('verdict=' + (fails.length ? 'fail' : 'pass'));
+    return fails.length ? EXIT.fail : EXIT.pass;
+  }
+  console.log(
+    'verdict=observed_only reason=attached_to_existing port=' + server.port +
+      ' thresholds=' + (fails.length ? 'missed' : 'met'),
+  );
+  console.error(
+    '[probe-mesh] attached_to=existing port=' + server.port +
+      '：没有做端口隔离，这些数不能当 PASS，也不能归因成回归。',
+  );
+  return EXIT.observed;
 }
 
 main().then(
   (code) => process.exit(code),
   (e) => {
+    if (e instanceof PortAcquireError) {
+      // 端口/连接拿不到：只报一句人话 + exit 3，不甩栈
+      console.error('[probe-mesh] 端口/连接获取失败：' + e.message);
+      process.exit(e.exitCode);
+    }
     console.error('[probe-mesh] ' + (e instanceof Error ? e.stack || e.message : String(e)));
-    process.exit(1);
+    process.exit(EXIT.fail);
   },
 );

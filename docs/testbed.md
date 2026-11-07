@@ -168,6 +168,8 @@ L1/L3/L4、遥测、遇障判定照旧只读 `BodyState`。
 | 上行 | 指令按 60 Hz 上限发（动画帧 120 fps 时不会刷爆 WS） |
 | 上行闸门（P0d） | 所有指令只经 `cmd-gate.ts` 一处出去：**用户没输入前恒发 `(0,0,0)`**；首帧收真实 yaw 做零位。修掉「页面一加载就发 yaw 0.57 → 服务端立刻 POLICY 开走」（`?sim=wasm` 档没有这个 bug，因为它不跨网络） |
 | 网格 | 由 `manifest.json` + 首帧 `geom.mesh/meshMeta` 组装 35 块 STL（见下节）；加载失败打 sys 事件并退回占位角色，不静默 |
+| 端点覆盖 | `?ws=ws://127.0.0.1:8791/sim` 可改连别的 sim_server（默认 8788）；探针靠它把页面指到自己自选的端口 |
+| 探针端口（P0f） | 探针**自选空闲端口**（8790 起真 bind 扫描，8788 不在区间）并自起 sim_server，跑完关；端口被抢或应答的是旧实例 → exit 3 并打印「疑似另一个 sim_server 在跑」。`--port/--url` 是**显式 attach**：只给仅观测（exit 2，绝不打印 PASS）——把「连上别人」说成通过就是造假 |
 | `reset()` | 服务端没有复位端点，`Body.reset()` 只能把指令清零；骨盆位置要重启 `sim_server` |
 
 **客户端延迟实测（2026-11-07 · 本机 · n=3 · `node testbed/scripts/probe-ws.mjs --seconds 60`，表里是第一次）**

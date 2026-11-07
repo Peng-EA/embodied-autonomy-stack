@@ -323,7 +323,10 @@ const reflex = { until: 0, vx: 0, vz: 0, cooldown: 0, count: 0, armedAt: 0 };
 // 默认 G1；模型没装（或显式 ?body=capsule）时退回胶囊。
 const MJ_BASE = (import.meta as any).env?.BASE_URL + 'mujoco/';
 // 默认后端是 WS（sim_server 权威环）；?sim=wasm 走浏览器内 wasm 那一档
-const SIM_WS = 'ws://127.0.0.1:8788/sim';
+// P0f：无头探针会用 ?ws=... 把页面指到它自选端口上的 sim_server（默认仍是手工 8788）。
+// 只接受 ws:// 或 wss://，非法值一律回落到默认，避免把随便什么 URL 当身体后端。
+const WS_QUERY = new URLSearchParams(location.search).get('ws');
+const SIM_WS = WS_QUERY && /^wss?:\/\//.test(WS_QUERY) ? WS_QUERY : 'ws://127.0.0.1:8788/sim';
 let body: Body | null = null;
 let capsule: CapsuleBody | null = null;
 let g1: G1Body | null = null;

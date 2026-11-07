@@ -4,13 +4,18 @@
 // 用法（仓库根目录）：
 //   node testbed/scripts/probe-idle.mjs --seconds 20
 //
+// P0f（端口隔离）：默认不连任何"已经存在的 8788"，而是从 8790 起自选空闲端口、自起 sim_server、
+// 跑完关掉（lib/sim-server.mjs 负责）；输出打印port=实际端口 与 attached_to=self。
+// 只有显式 --port N / --url 才 attach 到已存在服务，那时只作观测（exit 2），不给 PASS/FAIL。
+// 事故背景：8788 上有 run-l4 在驱动机器人时，旧探针会接上去，把别人的运动当成自己的回归。
+//
 // 它直接 import 页面跑的那两份实现，不复制一份"探针专用"逻辑：
 //   - testbed/src/console/cmd-gate.ts  —— 页面唯一的指令出处（P0d 加的闸门）
 //   - testbed/src/console/g1-body-ws.ts —— WS 身体
 // 调用顺序也照页面 useBody() + animate()：reset 一次 → 首帧 state 对齐 → 每帧
 // gate.command(0,0) → body.step()。所以测的就是页面那条路。
 //
-// 判据（不达标 exit 1）：
+// 判据（不达标 exit 1；只对隔离运行生效）：
 //   first_cmd        |vx|,|vz|,|yaw| 全 < 1e-6  首帧上行必须是 cmd(0,0,0)
 //   mode_flip_count  == 0                       服务端 switches 不涨：20 s 一直 HOLD
 //   moved_m          <= 0.05                    HOLD 站着漂移 ≤5 cm
@@ -21,9 +26,9 @@
 // 与首帧对齐的功劳；mode/moved 依赖服务端真值（/health 的 mode.switches 与帧里的
 // x/z），两者任一缺失就按实测值报，不补 0。
 
-import { G1BodyWs, DEFAULT_WS_URL } from '../src/console/g1-body-ws.ts';
+import { G1BodyWs } from '../src/console/g1-body-ws.ts';
 import { CmdGate } from '../src/console/cmd-gate.ts';
-import { ensureServer, healthUrlOf, healthJson, killQuiet, wsCtor } from './lib/sim-server.mjs';
+import { EXIT, PortAcquireError, acquireSimServer, healthJson, serverLine, wsCtor } from './lib/sim-server.mjs';
 
 const LIMITS = { firstCmd: 1e-6, movedM: 0.05 };
 const DT = 1 / 60;
@@ -31,11 +36,12 @@ const DT = 1 / 60;
 const STEP_MS = 16;
 
 function parseArgs(argv) {
-  const out = { seconds: 20, url: DEFAULT_WS_URL, spawn: true, help: false };
+  const out = { seconds: 20, url: null, port: null, spawn: true, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--seconds' || a === '-s') out.seconds = Number(argv[++i]);
     else if (a === '--url') out.url = String(argv[++i]);
+    else if (a === '--port') out.port = Number(argv[++i]);
     else if (a === '--no-spawn') out.spawn = false;
     else if (a === '--help' || a === '-h') out.help = true;
   }
@@ -50,23 +56,25 @@ function fmt(x, digits = 6) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('node testbed/scripts/probe-idle.mjs [--seconds 20] [--url ws://127.0.0.1:8788/sim] [--no-spawn]');
-    return 0;
+    console.log('node testbed/scripts/probe-idle.mjs [--seconds 20] [--port N | --url ws://127.0.0.1:8788/sim] [--no-spawn]');
+    console.log('  默认：自选空闲端口（8790 起）自起 sim_server，跑完关掉；--port/--url 才 attach 已存在服务（仅观测，exit 2）');
+    return EXIT.pass;
   }
 
-  const server = await ensureServer(args.url, args.spawn);
+  const server = await acquireSimServer({ url: args.url, port: args.port, allowSpawn: args.spawn, label: 'probe-idle' });
+  console.log(serverLine(server));
   const ws = wsCtor();
 
   let body = null;
   try {
-    body = await G1BodyWs.create(args.url, { WebSocketCtor: ws.ctor, rttEveryMs: 0 });
+    body = await G1BodyWs.create(server.url, { WebSocketCtor: ws.ctor, rttEveryMs: 0 });
   } catch (e) {
     console.error('[probe-idle] 连接失败：' + (e instanceof Error ? e.message : String(e)));
-    killQuiet(server.child);
-    return 1;
+    server.close();
+    return EXIT.fail;
   }
 
-  const health0 = await healthJson(healthUrlOf(args.url));
+  const health0 = await healthJson(server.healthUrl);
 
   // 页面 useBody() 的动作：先 reset（发一帧 0，这是真实上行，不是伪造），再进 animate
   body.reset(0, 0.4);
@@ -106,10 +114,10 @@ async function main() {
 
   const finalState = body.state();
   const finalFrameMode = body.frame()?.mode ?? null;
-  const health1 = await healthJson(healthUrlOf(args.url));
+  const health1 = await healthJson(server.healthUrl);
   const frames = body.stats().frames - frames0;
   body.close();
-  killQuiet(server.child);
+  server.close();
 
   // 模式翻转以服务端 /health 的 switches 为准（帧里的 mode 只做交叉核对）
   const sw0 = health0?.mode?.switches;
@@ -132,7 +140,9 @@ async function main() {
       ' switches=' + (switchesDelta === null ? 'n/a' : switchesDelta) +
       ' observed_flips=' + observedFlips +
       ' mode_src=' + modeSource +
-      ' ws=' + ws.name,
+      ' ws=' + ws.name +
+      ' port=' + server.port +
+      ' attached_to=' + (server.attached ? 'existing' : 'self'),
   );
 
   const fails = [];
@@ -143,17 +153,36 @@ async function main() {
   if (!(moved <= LIMITS.movedM)) fails.push('moved_m ' + fmt(moved, 4) + ' > ' + LIMITS.movedM);
   if (finalMode !== 'HOLD') fails.push('final_mode ' + (finalMode ?? 'null') + ' != HOLD');
 
-  if (fails.length) {
-    for (const f of fails) console.error('FAIL: ' + f);
-    return 1;
+  for (const f of fails) console.error('FAIL: ' + f);
+  return verdictFor(server, fails);
+}
+
+/** 隔离运行才给 PASS/FAIL；attach 到别人的服务只给观测（exit 2），两种误报都不犯 */
+function verdictFor(server, fails) {
+  if (!server.attached) {
+    console.log('verdict=' + (fails.length ? 'fail' : 'pass'));
+    return fails.length ? EXIT.fail : EXIT.pass;
   }
-  return 0;
+  console.log(
+    'verdict=observed_only reason=attached_to_existing port=' + server.port +
+      ' thresholds=' + (fails.length ? 'missed' : 'met'),
+  );
+  console.error(
+    '[probe-idle] attached_to=existing port=' + server.port +
+      '：没有做端口隔离，这些数不能当 PASS，也不能归因成回归（同一服务上可能还有别的驱动者）。',
+  );
+  return EXIT.observed;
 }
 
 main().then(
   (code) => process.exit(code),
   (e) => {
+    if (e instanceof PortAcquireError) {
+      // 端口/连接拿不到：只报一句人话 + exit 3，不甩栈
+      console.error('[probe-idle] 端口/连接获取失败：' + e.message);
+      process.exit(e.exitCode);
+    }
     console.error('[probe-idle] ' + (e instanceof Error ? e.stack || e.message : String(e)));
-    process.exit(1);
+    process.exit(EXIT.fail);
   },
 );

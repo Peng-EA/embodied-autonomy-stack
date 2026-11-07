@@ -11,6 +11,12 @@
 
 ### Added
 
+- **探针端口隔离（P0f）**：`testbed/scripts/lib/sim-server.mjs` 新增 `acquireSimServer()`——探针默认 8790 起真 bind 找空闲端口、
+  自起 sim_server、跑完关；8788 不在扫描区间，绝不复用别人的实例。端口被抢或 `/health` 应答的是旧实例 → exit 3
+  并打印「疑似另一个 sim_server 在跑」。`--port/--url` 改为**显式 attach**：只输出 `attached_to=existing` + `observed_only`
+  并 exit 2，不打印 PASS（既不许把「连上别人」说成通过，也不许把别人的抖动记成我们的回归）。
+  页面新增 `?ws=` 覆盖端点（默认仍 8788）。起因是实测事故：`run-l4` 的 harness 在 8788 驱动机器人时，
+  同时跑的 `probe-idle/probe-ws/probe-autonomy` 被带着走（moved 1.55 m、y 抖到 0.716），看起来像全面回归，实际是串台。
 - **修复"带动量交接给 pose hold 会侧翻"（P5）**：`modes.py` 的交接改为三段——POLICY 内命令 0.4 s 线性降到 0 →
   等 |v|<0.05 m/s（1.5 s 超时不交接，留在 POLICY 继续刹并 warn）→ 0.2 s `RAMP_S` 交接；且 ramp 期间**不冻结**策略目标，
   让策略继续原地踏步（冻结目标时同一速度换相位就倒：扫 16 个相位 6 摔，改后 16/16 不摔）。

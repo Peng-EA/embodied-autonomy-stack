@@ -4,10 +4,14 @@
 // 用法（仓库根目录）：
 //   node testbed/scripts/probe-ws.mjs --seconds 60
 //
+// P0f（端口隔离）：默认从 8790 起自选空闲端口、自起 sim_server、跑完关掉（lib/sim-server.mjs）；
+// 输出打印 port=实际端口 与 attached_to=self。只有显式 --port N / --url 才 attach 到已存在服务，
+// 那时只作观测（exit 2），不给 PASS/FAIL。事故背景：8788 上有人驱动机器人时旧探针会接上去。
+//
 // 它直接 import 浏览器那份实现（testbed/src/console/g1-body-ws.ts），不复制一份"探针专用"逻辑——
 // 测的就是页面跑的那条路。Node 24 默认剥类型；老 node 加 --experimental-strip-types。
 //
-// 判据（P0c 起是严格版，不达标 exit 1）：
+// 判据（P0c 起是严格版，不达标 exit 1；只对隔离运行生效）：
 //   frames        >= ceil(0.997 × 60 × seconds)  窗口内收到的 state 帧
 //                   → 60 s 要求 ≥3590（3600 的 99.7%）；跑 20 s 就是 ≥1197
 //   dropped       <= ceil(5 × seconds / 60)      按 tSim 步进（每 tick +0.016 s）推算的缺帧
@@ -20,8 +24,8 @@
 //
 // 边界：这里测的是**状态流延迟**，不是"图能跑"；P2b 的步子由 selfcheck --walk 管。
 
-import { G1BodyWs, DEFAULT_WS_URL, percentile } from '../src/console/g1-body-ws.ts';
-import { ensureServer, healthUrlOf, healthJson, killQuiet, wsCtor } from './lib/sim-server.mjs';
+import { G1BodyWs, percentile } from '../src/console/g1-body-ws.ts';
+import { EXIT, PortAcquireError, acquireSimServer, healthJson, serverLine, wsCtor } from './lib/sim-server.mjs';
 
 const LIMITS = { p95Rtt: 15, joints: 29, yMin: 0.75, yMax: 0.85 };
 /** 帧率判据：60 Hz × seconds 的 99.7% */
@@ -31,11 +35,12 @@ const DROPPED_PER_MIN = 5;
 const DT = 1 / 60;
 
 function parseArgs(argv) {
-  const out = { seconds: 60, url: DEFAULT_WS_URL, spawn: true };
+  const out = { seconds: 60, url: null, port: null, spawn: true, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--seconds' || a === '-s') out.seconds = Number(argv[++i]);
     else if (a === '--url') out.url = String(argv[++i]);
+    else if (a === '--port') out.port = Number(argv[++i]);
     else if (a === '--no-spawn') out.spawn = false;
     else if (a === '--help' || a === '-h') out.help = true;
   }
@@ -50,28 +55,30 @@ function fmt(x, digits = 2) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('node testbed/scripts/probe-ws.mjs [--seconds 60] [--url ws://127.0.0.1:8788/sim] [--no-spawn]');
-    return 0;
+    console.log('node testbed/scripts/probe-ws.mjs [--seconds 60] [--port N | --url ws://127.0.0.1:8788/sim] [--no-spawn]');
+    console.log('  默认：自选空闲端口（8790 起）自起 sim_server，跑完关掉；--port/--url 才 attach 已存在服务（仅观测，exit 2）');
+    return EXIT.pass;
   }
 
   const minFrames = Math.ceil(FRAME_RATIO * 60 * args.seconds);
   const maxDropped = Math.ceil((DROPPED_PER_MIN * args.seconds) / 60);
 
-  const server = await ensureServer(args.url, args.spawn);
+  const server = await acquireSimServer({ url: args.url, port: args.port, allowSpawn: args.spawn, label: 'probe-ws' });
+  console.log(serverLine(server));
   const ws = wsCtor();
 
   let body = null;
   const tConnect0 = performance.now();
   try {
-    body = await G1BodyWs.create(args.url, {
+    body = await G1BodyWs.create(server.url, {
       WebSocketCtor: ws.ctor,
       rttEveryMs: 250,
       onFallback: (why) => console.error('[probe] onFallback: ' + why),
     });
   } catch (e) {
     console.error('[probe] 连接失败：' + (e instanceof Error ? e.message : String(e)));
-    killQuiet(server.child);
-    return 1;
+    server.close();
+    return EXIT.fail;
   }
   const connectMs = performance.now() - tConnect0;
 
@@ -108,8 +115,8 @@ async function main() {
   body.close();
 
   // 服务端侧对照：published 是物理环发布数，skipped 是发送协程按 seq 合并掉的中间帧
-  const health = await healthJson(healthUrlOf(args.url));
-  killQuiet(server.child);
+  const health = await healthJson(server.healthUrl);
+  server.close();
 
   console.log('frames=' + frames);
   console.log('p95_rtt_ms=' + (p95 === null ? 'NaN' : fmt(p95)));
@@ -123,7 +130,9 @@ async function main() {
       ' rtt_n=' + s1.rttSamples + ' y_range=' + fmt(yMin, 6) + '..' + fmt(yMax, 6) +
       ' degraded_ticks=' + degradedSeen +
       ' server_published=' + (health?.frames_published ?? 'n/a') +
-      ' server_skipped=' + (health?.frames_skipped ?? 'n/a'),
+      ' server_skipped=' + (health?.frames_skipped ?? 'n/a') +
+      ' port=' + server.port +
+      ' attached_to=' + (server.attached ? 'existing' : 'self'),
   );
 
   const fails = [];
@@ -135,17 +144,36 @@ async function main() {
   if (!(y >= LIMITS.yMin && y <= LIMITS.yMax)) fails.push('y ' + fmt(y, 6) + ' 不在 ' + LIMITS.yMin + '..' + LIMITS.yMax);
   if (yMin < LIMITS.yMin || yMax > LIMITS.yMax) fails.push('y 抖动超出 ' + LIMITS.yMin + '..' + LIMITS.yMax + ' 区间');
 
-  if (fails.length) {
-    for (const f of fails) console.error('FAIL: ' + f);
-    return 1;
+  for (const f of fails) console.error('FAIL: ' + f);
+  return verdictFor(server, fails);
+}
+
+/** 隔离运行才给 PASS/FAIL；attach 到别人的服务只给观测（exit 2），两种误报都不犯 */
+function verdictFor(server, fails) {
+  if (!server.attached) {
+    console.log('verdict=' + (fails.length ? 'fail' : 'pass'));
+    return fails.length ? EXIT.fail : EXIT.pass;
   }
-  return 0;
+  console.log(
+    'verdict=observed_only reason=attached_to_existing port=' + server.port +
+      ' thresholds=' + (fails.length ? 'missed' : 'met'),
+  );
+  console.error(
+    '[probe-ws] attached_to=existing port=' + server.port +
+      '：没有做端口隔离，这些数不能当 PASS，也不能归因成回归（同一服务上可能还有别的驱动者）。',
+  );
+  return EXIT.observed;
 }
 
 main().then(
   (code) => process.exit(code),
   (e) => {
+    if (e instanceof PortAcquireError) {
+      // 端口/连接拿不到：只报一句人话 + exit 3，不甩栈
+      console.error('[probe] 端口/连接获取失败：' + e.message);
+      process.exit(e.exitCode);
+    }
     console.error('[probe] ' + (e instanceof Error ? e.stack || e.message : String(e)));
-    process.exit(1);
+    process.exit(EXIT.fail);
   },
 );

@@ -3,17 +3,24 @@
 //
 // 用法（仓库根目录）：
 //   node testbed/scripts/probe-autonomy.mjs
-//   node testbed/scripts/probe-autonomy.mjs --seconds 10 --no-spawn --no-build
+//   node testbed/scripts/probe-autonomy.mjs --seconds 10 --no-build
+//   node testbed/scripts/probe-autonomy.mjs --sim-port 8788   # attach 已存在服务（仅观测，exit 2）
+//
+// P0f（端口隔离）：默认从 8790 起自选空闲端口、自起 sim_server、跑完关掉（lib/sim-server.mjs）；
+// 页面用 ?ws=... 指到该端口（main.ts 读的是这个参数，默认仍是手工 8788）。
+// 输出打印 port=实际端口 与 attached_to=self。只有显式 --sim-port N / --url 才 attach 已存在服务。
+// 这里 --port 仍保留给 vite preview（P0f 之前就是这样，别悄悄改语义），sim 的显式端口用 --sim-port。
+// 事故背景：8788 上有 run-l4 驱动机器人时，旧探针会接上去，把别人的运动当成自己的回归。
 //
 // 它跑的是**真页面**（仓库已有的 puppeteer-core + 本机 Edge headless，不装新包）：
-//   vite build → vite preview(4174) → 打开 console.html?debug=1[&auto=1]
+//   vite build → vite preview(4174) → 打开 console.html?debug=1[&auto=1][&ws=...]
 //   → 等 WS 身体就绪 → window.__dbg.forceL4({x:1.6,z:0.6})
 //   → 页面内 16 ms 采样 10 s（上行指令幅度 / 服务端真值位姿 / 服务端模式机）
 //
 // forceL4 调的是页面同一个 adoptL4Intent()（main.ts 的 L4 唯一采纳口），不是探针专用分支；
 // 位姿取 /sim 帧里的服务端真值，不是页面显示坐标（__state 的 x/z 只到 cm，不够用）。
 //
-// 判据（不达标 exit 1）：
+// 判据（不达标 exit 1；只对隔离运行生效）：
 //   A 默认（无 ?auto）  moved_m ≤ 0.05   denied_events ≥ 1
 //                        —— 闸门必须真的拒，而不是"数值刚好是 0"
 //   B ?auto=1          moved_m ≥ 0.5    mode_seen 含 POLICY
@@ -28,7 +35,14 @@ import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import puppeteer from 'puppeteer-core';
-import { ensureServer, healthUrlOf, healthJson, killQuiet, ROOT } from './lib/sim-server.mjs';
+import {
+  EXIT,
+  PortAcquireError,
+  ROOT,
+  acquireSimServer,
+  healthJson,
+  serverLine,
+} from './lib/sim-server.mjs';
 
 const TESTBED = path.join(ROOT, 'testbed');
 const LIMITS = { aMoved: 0.05, bMoved: 0.5, yMin: 0.5 };
@@ -45,18 +59,27 @@ const LIMITS = { aMoved: 0.05, bMoved: 0.5, yMin: 0.5 };
 const FORCE_TARGET = { x: 1.2, z: 0.4 };
 
 function parseArgs(argv) {
-  const out = { seconds: 10, url: 'ws://127.0.0.1:8788/sim', spawn: true, build: true, port: 4174, help: false };
+  const out = {
+    seconds: 10,
+    url: null,
+    simPort: null,
+    previewPort: 4174,
+    spawn: true,
+    build: true,
+    help: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--seconds' || a === '-s') out.seconds = Number(argv[++i]);
     else if (a === '--url') out.url = String(argv[++i]);
-    else if (a === '--port') out.port = Number(argv[++i]);
+    else if (a === '--sim-port') out.simPort = Number(argv[++i]);
+    else if (a === '--port') out.previewPort = Number(argv[++i]);
     else if (a === '--no-spawn') out.spawn = false;
     else if (a === '--no-build') out.build = false;
     else if (a === '--help' || a === '-h') out.help = true;
   }
   if (!Number.isFinite(out.seconds) || out.seconds <= 0) throw new Error('--seconds 需要正数');
-  if (!Number.isFinite(out.port) || out.port <= 0) throw new Error('--port 需要正数');
+  if (!Number.isFinite(out.previewPort) || out.previewPort <= 0) throw new Error('--port 需要正数（vite preview 端口）');
   return out;
 }
 
@@ -112,10 +135,19 @@ async function startPreview(port) {
   );
   const ok = await waitHttp('http://127.0.0.1:' + port + '/console.html');
   if (!ok) {
-    killQuiet(child);
+    killQuietPreview(child);
     throw new Error('vite preview 没起来（端口 ' + port + '，可能被占用）');
   }
   return child;
+}
+
+function killQuietPreview(child) {
+  if (!child) return;
+  try {
+    child.kill();
+  } catch {
+    /* 已退 */
+  }
 }
 
 function browserPath() {
@@ -214,8 +246,11 @@ async function scenario(browser, cfg, args, server) {
   });
   await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
 
+  // ws= 把页面指到探针自起/attach 的那个端口（main.ts 的 SIM_WS 读这个参数）
   const url =
-    'http://127.0.0.1:' + args.port + '/console.html?debug=1' + (cfg.auto ? '&auto=1' : '');
+    'http://127.0.0.1:' + args.previewPort + '/console.html?debug=1' +
+    (cfg.auto ? '&auto=1' : '') +
+    '&ws=' + encodeURIComponent(server.url);
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
   const ready = await waitReady(page);
@@ -233,7 +268,7 @@ async function scenario(browser, cfg, args, server) {
 
   const s = await readSampler(page);
   const gate = await page.evaluate(() => globalThis.__dbg.gate());
-  const health = await healthJson(healthUrlOf(args.url));
+  const health = await healthJson(server.healthUrl);
   const finalMode = health?.mode?.mode ?? s.lastMode ?? null;
 
   await page.close();
@@ -273,20 +308,27 @@ function judgeB(r, fails) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('node testbed/scripts/probe-autonomy.mjs [--seconds 10] [--url ws://127.0.0.1:8788/sim] [--port 4174] [--no-spawn] [--no-build]');
-    return 0;
+    console.log(
+      'node testbed/scripts/probe-autonomy.mjs [--seconds 10] [--port 4174(preview)] ' +
+        '[--sim-port N | --url ws://127.0.0.1:8788/sim] [--no-spawn] [--no-build]',
+    );
+    console.log('  默认：自选空闲端口（8790 起）自起 sim_server，页面用 ?ws= 指过去；--sim-port/--url 才 attach 已存在服务（仅观测，exit 2）');
+    return EXIT.pass;
   }
 
-  const server = await ensureServer(args.url, args.spawn);
+  const server = await acquireSimServer({ url: args.url, port: args.simPort, allowSpawn: args.spawn, label: 'probe-autonomy' });
+  console.log(serverLine(server));
+
   let preview = null;
   let browser = null;
   const fails = [];
   let a = null;
   let b = null;
+  let crashed = false;
 
   try {
     if (args.build) await buildBundle();
-    preview = await startPreview(args.port);
+    preview = await startPreview(args.previewPort);
 
     browser = await puppeteer.launch({
       executablePath: browserPath(),
@@ -325,31 +367,51 @@ async function main() {
     console.log(
       '  final_m=' + fmt(b.finalM) + ' cmd_max=' + fmt(b.cmdMax) + ' denied_events=' + b.deniedEvents +
         ' gate_source=' + (b.gateSource ?? 'null') + ' autonomy=' + b.autonomyEnabled +
-        ' y_max=' + fmt(b.yMax) + ' y_min_at=' + (b.yMinAt ?? 'n/a') + 's samples=' + b.samples,
+        ' y_max=' + fmt(b.yMax) + ' y_min_at=' + (b.yMinAt ?? 'n/a') + 's samples=' + b.samples +
+        ' port=' + server.port + ' attached_to=' + (server.attached ? 'existing' : 'self'),
     );
 
     const errs = [...a.errors, ...b.errors];
     if (errs.length) console.log('page_errors=' + errs.length + ' · ' + errs.slice(0, 3).join(' | '));
   } catch (e) {
+    crashed = true;
     fails.push('探针异常：' + (e instanceof Error ? e.message : String(e)));
   } finally {
     if (browser) await browser.close().catch(() => {});
-    killQuiet(preview);
-    killQuiet(server.child);
+    killQuietPreview(preview);
+    server.close();
   }
 
-  if (fails.length) {
-    for (const f of fails) console.error('FAIL: ' + f);
-    return 1;
+  for (const f of fails) console.error('FAIL: ' + f);
+
+  // attach 到别人的服务：只观测（exit 2），不给 PASS、也不把不达标归因成回归
+  if (server.attached && !crashed) {
+    console.log(
+      'verdict=observed_only reason=attached_to_existing port=' + server.port +
+        ' thresholds=' + (fails.length ? 'missed' : 'met'),
+    );
+    console.error(
+      '[probe-autonomy] attached_to=existing port=' + server.port +
+        '：没有做端口隔离，这些数不能当 PASS，也不能归因成回归（同一服务上可能还有别的驱动者）。',
+    );
+    return EXIT.observed;
   }
+
+  if (fails.length) return EXIT.fail;
+  console.log('verdict=pass');
   console.log('OK: A 被拒（denied_events≥1，moved≤' + LIMITS.aMoved + '）；B 放行（POLICY→' + fmt(b?.moved) + ' m → HOLD）');
-  return 0;
+  return EXIT.pass;
 }
 
 main().then(
   (code) => process.exit(code),
   (e) => {
+    if (e instanceof PortAcquireError) {
+      // 端口/连接拿不到：只报一句人话 + exit 3，不甩栈
+      console.error('[probe-autonomy] 端口/连接获取失败：' + e.message);
+      process.exit(e.exitCode);
+    }
     console.error('[probe-autonomy] ' + (e instanceof Error ? e.stack || e.message : String(e)));
-    process.exit(1);
+    process.exit(EXIT.fail);
   },
 );
