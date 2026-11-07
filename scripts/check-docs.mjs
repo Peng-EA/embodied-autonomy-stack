@@ -2,7 +2,8 @@
 // 文档结构检查：链接可解析、表格有分隔行、无行尾空白/Tab、文件以换行结尾。
 // 不引第三方依赖，CI 里直接 `node scripts/check-docs.mjs` 就能跑。
 //
-// 检查范围：仓库内所有 .md（跳过 node_modules / .venv / dist / logs / .git）。
+// 检查范围：仓库内所有 .md（跳过 node_modules / .venv / dist / logs / .git / .tmp）。
+// .tmp/ 是本地落地目录（权重、下载的仓库），里面的 README 不是本仓库的文档，不该算死链。
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -10,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '..')
-const SKIP_DIRS = new Set(['.git', 'node_modules', '.venv', 'dist', 'logs', '__pycache__', '.vitepress'])
+const SKIP_DIRS = new Set(['.git', 'node_modules', '.venv', 'dist', 'logs', '__pycache__', '.vitepress', '.tmp'])
 
 let problems = 0
 
