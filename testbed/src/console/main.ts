@@ -10,6 +10,7 @@ import { Planner, STALE_AGE_MS } from './plan.ts';
 import { Affect } from './affect.ts';
 import { RoomPhysics } from './physics.ts';
 import type { Body } from './body.ts';
+import { CmdGate } from './cmd-gate.ts';
 import { CapsuleBody } from './capsule-body.ts';
 import { G1Body } from './g1-body.ts';
 import { G1BodyWs } from './g1-body-ws.ts';
@@ -321,6 +322,16 @@ let bodyKind: 'capsule' | 'g1' = 'capsule';
 let blockedFrames = 0;
 let lastActAt = -99;
 
+// P0d：上行指令的唯一出处。用户没真输入之前，它只发 (0,0,0)；
+// 首帧 state 到手后再把 yaw 零位对齐到真实朝向（见 cmd-gate.ts）。
+const gate = new CmdGate();
+(window as any).__gate = gate;
+
+// 第一次真输入（键盘/点击/摇杆/聊天）才放行非零指令：显式标志，不靠数值巧合。
+// 页面目前没有键盘/摇杆控制，先让"按下任意键 / 点一下"成为授权动作。
+addEventListener('keydown', () => gate.authorize(), { passive: true });
+addEventListener('pointerdown', () => gate.authorize(), { passive: true });
+
 // ---------------------------------------------------------------- 5 个动作
 type Act = 'none' | 'sit' | 'pick' | 'drink' | 'startle';
 let act: Act = 'none';
@@ -386,6 +397,8 @@ const spots: Record<string, [number, number]> = {
 function go(name: string) {
   const p = spots[name];
   if (!p) return;
+  // 显式运动意图（聊天指令 / ?auto 演示）：这是"人让它走"，不是加载即发
+  gate.authorize();
   target = new THREE.Vector3(p[0], 0, p[1]);
   mode = 'walk';
   say('收到，去' + name + '。');
@@ -477,6 +490,7 @@ function handle(text: string) {
 
 ($('say') as HTMLFormElement).onsubmit = (e) => {
   e.preventDefault();
+  gate.authorize(); // 聊天提交＝真输入（键盘/点击之外的后门，同样只放行显式意图）
   const input = $('msg') as HTMLInputElement;
   const v = input.value;
   if (!v.trim()) return;
@@ -844,13 +858,18 @@ function animate() {
       const speed = 1.15 * affect.speedScale();
       vx = dir.x * speed;
       vz = dir.z * speed;
+      // 显示朝向给渲染，指令朝向给 gate：两者不再互相冒充（P0d）
+      gate.turnTo(Math.atan2(dir.x, dir.z));
       char.rotation.y = Math.atan2(dir.x, dir.z) + yawOffset;
     }
   }
 
   // 同一份指令，两个身体：谁在跑由 bodyKind 决定
   if (body) {
-    const st = body.step(dt, { vx, vz, yaw: char.rotation.y - yawOffset });
+    // P0d 首帧对齐：真实 state 一到手就把 yaw 指令零位钉在它的真实朝向上。
+    // 对齐后静止时 yaw 指令精确为 0，不依赖 char.rotation.y 的构图角度。
+    if (!gate.aligned) gate.align(body.state().yaw);
+    const st = body.step(dt, gate.command(vx, vz));
     char.position.x = st.x;
     char.position.z = st.z;
 
@@ -954,8 +973,11 @@ setInterval(() => {
 }, 1000);
 
 (window as any).__setYaw = (v: number) => { char.rotation.y = v; yawOffset = v; };
+// 调试：看这一帧真正发出去的指令 / 授权状态（P0d 的验收眼）
+(window as any).__cmd = () => gate.lastCommand;
 (window as any).__state = () => ({
   body: bodyKind,
+  gate: { authorized: gate.authorized, aligned: gate.aligned, cmd: gate.lastCommand },
   rot: Math.round(char.rotation.y * 100) / 100,
   mode,
   hasTarget: !!target,

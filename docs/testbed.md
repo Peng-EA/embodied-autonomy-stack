@@ -166,6 +166,7 @@ L1/L3/L4、遥测、遇障判定照旧只读 `BodyState`。
 | `degraded` | 连接断了、或帧停 500 ms 以上 = true。**不伪造数据**：`state()` 返回最后一帧真实状态（`tSim` 不前进），帧数/RTT 照实计；一帧都没到手时 `state()` 直接抛错，`create()` 也不会 resolve 出一个空壳 |
 | `onFallback` | 运行期断线超过 10 s 仍未恢复 → 回调一次（界面打 sys 事件），重连本身继续 |
 | 上行 | 指令按 60 Hz 上限发（动画帧 120 fps 时不会刷爆 WS） |
+| 上行闸门（P0d） | 所有指令只经 `cmd-gate.ts` 一处出去：**用户没输入前恒发 `(0,0,0)`**；首帧收真实 yaw 做零位。修掉「页面一加载就发 yaw 0.57 → 服务端立刻 POLICY 开走」（`?sim=wasm` 档没有这个 bug，因为它不跨网络） |
 | 网格 | 由 `manifest.json` + 首帧 `geom.mesh/meshMeta` 组装 35 块 STL（见下节）；加载失败打 sys 事件并退回占位角色，不静默 |
 | `reset()` | 服务端没有复位端点，`Body.reset()` 只能把指令清零；骨盆位置要重启 `sim_server` |
 

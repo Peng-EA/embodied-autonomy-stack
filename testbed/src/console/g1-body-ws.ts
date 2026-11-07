@@ -46,6 +46,9 @@ export interface G1WsFrame {
     meshMeta?: Record<string, MeshMeta>;
   };
   contacts?: number;
+  /** P2b 追加的服务端键：当前模式机（HOLD / POLICY）。不是 body.ts 的契约字段，
+   *  客户端只做观测（probe-idle 用它数模式翻转），不参与 BodyState。 */
+  mode?: string;
 }
 
 export interface G1WsStats {
