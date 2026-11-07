@@ -4,18 +4,20 @@
 
   C -> S  {"t": <client_ts>, "cmd": {"vx": <m/s>, "vz": <m/s>, "yaw": <rad>}, "jointTargets": {...}|null}
   S -> C  {"tSim", "x", "y", "z", "yaw", "speed", "blocked", "joints",
-           "geom": {"xpos": [...], "xmat": [...]}, "contacts": <n>}
+           "geom": {"xpos": [...], "xmat": [...]}, "contacts": <n>, "mode": "HOLD"|"POLICY"}
 
 - x/y/z 是 three 右手系（y 向上），来自 sim_server.world 的转换；浏览器不用再翻。
 - joints 是 29 个铰链关节名 -> 角度（rad），BodyState.joints 同构。
 - geom 每帧给全部 geom 的 xpos(3n) / xmat(9n)，three 系；names 只在连接后的第一条消息里给一次
   （n 不变，没必要 60 Hz 重复）。
 - contacts 是 data.ncon（活跃接触点数）。
+- mode 是 **P2b 追加的键**（body.ts 的契约字段一个没动）：HOLD = pose hold 站住，
+  POLICY = G1 joystick 策略在走。判据/滞回/ramp 全在 modes.py，这里只透传。
 - 连接后先发一条 full 消息（含 geom.names），之后每 tick 一条。
 
-P0 的诚实边界：cmd 不产生运动（没有策略、没有步态）。只要你给 cmd 里带速度，
-speed 会一直是 0，于是 blocked 按 body.ts 的 isBlocked 变成 True——这**不是撞墙**，
-是「想走走不动」。浏览器侧在 P2b 之前必须照实标注。
+P2b 之后 cmd 会产生运动了，但**两段是两套机构**：cmd 静止 → HOLD（kp=500 保位），
+cmd 有速度 → POLICY（kp=75 的策略）。所以「站着」永远是 HOLD 干的，
+不许把它算成策略的能力（策略零命令 5 s 漂 0.387 m，见 policies/SPIKE.md §2）。
 
 跑法（仓库根目录，端口默认 8788，server 的 L4 服务占 8787）：
   server/.venv/Scripts/python.exe -m sim_server.app --port 8788
@@ -34,6 +36,7 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
+from .modes import ModeController
 from .stand import PoseHold
 from .world import STEPS_PER_TICK, TICK_HZ, World
 
@@ -51,6 +54,8 @@ class SimRuntime:
     def __init__(self, xml_path: str | None = None, tick_hz: float = TICK_HZ) -> None:
         self.world = World(xml_path)
         self.hold = PoseHold(self.world)
+        # HOLD / POLICY 状态机（modes.py）：所有 ctrl 都从这里出，物理环本身不管模式
+        self.mode = ModeController(self.world, self.hold)
         self.tick_hz = float(tick_hz)
         self.cmd: dict[str, float] = {"vx": 0.0, "vz": 0.0, "yaw": 0.0}
         self.joint_targets: dict[str, float] | None = None
@@ -61,7 +66,7 @@ class SimRuntime:
 
     def reset(self) -> None:
         self.world.reset()
-        self.hold.apply(self.world.data)
+        self.mode.reset()
         self.contacts = int(self.world.data.ncon)
         self.ticks = 0
 
@@ -89,22 +94,27 @@ class SimRuntime:
             jt = msg["jointTargets"]
             if jt is None:
                 self.joint_targets = None
+                self.mode.set_joint_targets(None)
             elif isinstance(jt, dict):
                 try:
                     self.joint_targets = {str(k): float(v) for k, v in jt.items()}
-                    self.hold.apply(self.world.data, self.joint_targets)  # 先试一次，错就报
+                    self.mode.set_joint_targets(self.joint_targets)  # 未知关节当场抛
                 except (KeyError, TypeError, ValueError) as exc:
                     self.last_error = str(exc)
                     self.joint_targets = None
+                    self.mode.set_joint_targets(None)
             else:
                 self.last_error = "jointTargets must be object or null"
+        # 注意：jointTargets 只在 HOLD 生效；POLICY 的目标归网络（modes.py 里说明）
 
     # ---------- 每 tick ----------
 
     def tick(self) -> None:
+        # 物理步由 mode.advance 一格一格推：策略要 50 Hz（每 10 个 2 ms 步）换一次动作，
+        # 而状态流 tick 是 8 个物理步 —— 两者对不齐，所以控制边界必须落在物理步上。
         self.world.set_cmd(self.cmd)
-        self.hold.apply(self.world.data, self.joint_targets)
-        self.world.step(STEPS_PER_TICK)
+        self.mode.set_cmd(self.cmd)
+        self.mode.advance(STEPS_PER_TICK)
         self.contacts = int(self.world.data.ncon)
         self.ticks += 1
 
@@ -121,6 +131,7 @@ class SimRuntime:
             "joints": {k: _r6(v) for k, v in s["joints"].items()},
             "geom": self.world.geom_payload(with_names=full),
             "contacts": self.contacts,
+            "mode": self.mode.mode,
         }
 
 
@@ -190,6 +201,9 @@ def create_app(runtime: SimRuntime | None = None, tick_hz: float = TICK_HZ) -> F
             "tick_hz_nominal": rt.tick_hz,
             "clients": len(hub.clients),
             "last_error": rt.last_error,
+            # P2b：模式机对外的全部可见状态（浏览器只需要 snapshot 里的 "mode"）
+            "mode": rt.mode.info(),
+            "infer_p95_ms": rt.mode.infer_p95_ms(),
         }
 
     @app.websocket("/sim")

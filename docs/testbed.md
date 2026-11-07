@@ -191,6 +191,36 @@ joints=29、y=0.791614 m、reconnects=0 三次相同。判据 3500 有富余但�
 服务端自身 tick 也只有 59.76 Hz（20.01 s 实测）。所以「60 s 无丢帧」这句话**不成立**，如实记在这里，
 要消掉得改服务端（把队列换成"合并最新"或把发送挪出物理 tick），不在 P0b 的范围。
 
+### 走路：joystick 策略（P2b · `sim_server/policies/g1_joystick.py`）
+
+权重来自 DeepMind `mujoco_playground` 的 G1 joystick ONNX（`g1_policy.onnx`，903,543 B，
+md5 `3dc6c4d61fd39588f57b4e2049e9a15f`）——**不是我们训的**，文档里也不许写成我们训的。
+obs 逐行照 `play_g1_joystick.py` + `joystick.py:_get_obs`：103 维（含 3 维 command、两腿 phase 的 cos/sin 共 4 维），
+50 Hz 推理（`ctrl_dt=0.02` = 10 个 2 ms 物理步），29 维动作 → `DEFAULT(knees_bent) + 0.5·a` 交位置执行器。
+
+| 模式 | 进入条件 | 增益 | 行为 |
+|---|---|---|---|
+| `HOLD` | 无速度/转向命令 | kp=500（继承 MJCF） | pose hold 站住；`jointTargets` 只在这个模式生效 |
+| `POLICY` | `v ≥ 0.15 m/s` 或 `yaw ≥ 0.3 rad/s`（退出阈值 0.12 / 0.24，滞回） | kp=75 / kd=2（训练值） | ONNX 策略接管 29 个位置执行器 |
+
+切模式时 kp/kd 与关节目标在 0.2 s 内线性插值，**不许瞬跳**；回 `HOLD` 前先刹车（实测 0.66 s；
+硬切必摔：z 0.79 → 0.06）。状态帧多一个 `mode` 键——`BodyState` 的契约字段没加，浏览器忽略即可。
+
+**实测（2026-11-07 · 本机 · n=1 · `python -m sim_server.selfcheck --walk --seconds 30`；速度与漂移另由 PM 用独立脚本复算）**
+
+| 指标 | 实测 | 判据 |
+|---|---|---|
+| hold_drift_30s | 0.0002 m | ≤ 0.05 m |
+| walk 5 s 平均速度（cmd 0.5） | 0.5531 m/s（PM 独立复算 0.553） | ≥ 0.4 m/s |
+| walk 30 s 平均速度 / 位移 | 0.5763 m/s / 16.50 m，`z_min` 0.7253，未摔 | 不摔 |
+| cmd 0.2 → 实测 | 0.255 m/s（PM 独立复算） | 比例跟踪 = 真速度环，不是定速动画 |
+| cmd 0 | 0.000 m/s，留在 `HOLD` | 静止必须走 HOLD |
+| 关节超限 | 0 / 29 | 0 |
+| 推理 P95 | 0.066 ms（n=2037） | ≤ 5 ms |
+| HOLD→POLICY→HOLD | no_fall=True（z_min 0.721） | 不摔 |
+
+**边界**：该策略**没有静止模式**（cmd=0 跑 5 s 漂 0.387 m，静止只能靠 HOLD）；把增益换回 MJCF 原样
+kp=500 会 4 s 倒地（训练假设是 kp=75/kd=2）；侧移、推扰、60 s 连续、`unitree_rl_mjlab` 的导出 onnx 均**未测（TBD）**。
 ## 设计（三层，各管一件事）
 
 | 层 | 位置 | 频率 | 职责 |

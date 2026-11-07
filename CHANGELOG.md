@@ -11,6 +11,13 @@
 
 ### Added
 
+- **G1 会走了：接入 DeepMind playground 的 joystick 策略（P2b）**：新增 `sim_server/policies/g1_joystick.py`
+  （103 维 obs / 29 维动作 / 50 Hz / ONNX 权重 md5 双验）与 `sim_server/modes.py`（HOLD↔POLICY 滞回 + 0.2 s 增益 ramp
+  + 回 HOLD 前刹车）。只有 POLICY 模式把执行器换成训练值 kp=75/kd=2，HOLD 仍用 kp=500 的 pose hold。
+  实测（n=1）：cmd 0.5 → 5 s 0.5531 m/s、30 s 0.5763 m/s / 16.50 m 未摔、0 关节超限、推理 P95 0.066 ms；
+  cmd 0.2 → 0.255 m/s（PM 独立复算，比例跟踪）；cmd 0 → 留在 HOLD；HOLD→POLICY→HOLD 不摔。
+  边界：策略无静止模式（cmd=0 漂 0.387 m/5 s）、侧移/推扰/60 s 未测（TBD）。
+- **`server/requirements.txt` 补 G1 仿真依赖**：`mujoco==4.0.0`（含 `mujoco-core`）、`onnxruntime>=1.31`。
 - **服务端权威仿真 `sim_server/`（G1 · P0a）**：MuJoCo 4.0.0 跑在 Python（2 ms 定步长、60 Hz 状态流、
   WS `/sim` @8788），浏览器退回客户端（`?sim=wasm` 保留离线档）。站立实现为 *pose hold*
   （keyframe `stand` 目标 + 位置执行器 PD，kp=500、kd 由 `dampratio="1"` 编译折算），

@@ -2,3 +2,7 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 httpx>=0.27
 pydantic>=2.7
+
+# G1 服务端仿真（sim_server/，P0 起）
+mujoco==4.0.0
+onnxruntime>=1.31
