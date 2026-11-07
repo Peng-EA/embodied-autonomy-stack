@@ -118,6 +118,8 @@ S → C（每 tick 一条，连接后先补一条 full）：
 | `joints` | 29 个铰链关节名 → 角度（rad），`BodyState.joints` 同构 |
 | `geom.xpos / xmat` | 全部 72 个 geom 的位置（3n）与旋转（9n，行主序），**已转成 three 系** |
 | `geom.names` | 只在连接后第一条消息里给一次（geom 数量不变，不必 60 Hz 重复） |
+| `geom.mesh` | **P0c 追加**，同样只在首帧：每个 geom 的 mesh 资产名（非网格 geom 为 `""`）。g1.xml 里 geom 大多没写 name（编译后是 `None` → `geom_N`），**名字反推不出网格**，所以单独给 |
+| `geom.meshMeta` | **P0c 追加**，同样只在首帧：mesh 名 → `{pos, quat, scale}`，即 MuJoCo 给该网格算的网格系。浏览器烘焙顶点要用它：`v = R(q)ᵀ·(v_stl·scale − pos)`。少这一项，整机包围盒会从 1.3228 m 虚胖到 1.4048 m、脚陷地里 8 cm（`probe-mesh.mjs` 量的就是这件事） |
 | `contacts` | `data.ncon`，活跃接触点数 |
 | `mode` | **P2b 追加**，`"HOLD"` / `"POLICY"`：当前谁在控。body.ts 契约字段一个没动 |
 
@@ -179,7 +181,7 @@ Python 侧不另写一遍力矩。
 |---|---|
 | `world.py` | 载入 MJCF（+ 地板）、`mj_step` 2 ms、`step(n)` / `state()`（BodyState 同构）、`height()` / `drift()`；**mj(z-up) → three(y-up) 的转换只在这里** |
 | `stand.py` | 读 keyframe + `ctrlrange` + kp/kd，PD 保位；`jointTargets` 覆盖与 clip |
-| `app.py` | FastAPI + WS `/sim` + `/health`；定步长循环、每客户端 1 格队列（发不动丢旧帧，不阻塞物理） |
+| `app.py` | FastAPI + WS `/sim` + `/health`；定步长循环只 `publish` 最新快照（**不做 WS I/O**），每客户端一条独立发送协程按 seq 取最新（慢客户端合并中间帧，不阻塞物理） |
 | `selfcheck.py` | headless 跑 N 秒，打印四行指标（`--walk` 打印 P2b 六项），exit code 0/1 |
 | `modes.py` | **HOLD/POLICY 状态机**：滞回判据、0.2 s ramp（目标 + kp + kd）、回 HOLD 前的刹车；所有 `ctrl` 都从这里出 |
 | `policies/g1_joystick.py` | ONNX 推理封装：103 维 obs 组装（照训练端）、50 Hz 控制、动作→29 个位置目标、权重 md5 校验 |
@@ -191,17 +193,25 @@ Python 侧不另写一遍力矩。
    都不成立（零命令 5 s 漂 0.387 m）。
 2. **只验了前进 0.5 m/s**：侧移 (0,±v,0)、后退、yaw 跟踪、1.0 m/s 以上、推扰恢复、
    **60 s 以上**全部 **TBD**（本次 n=1，只跑 30 s）。别拿 0.5 m/s 的结论外推。
-3. **仿真时间比墙钟慢 0.96 倍**：每 tick 固定 8×2 ms = 0.016 s 仿真，但按 60 Hz（1/60 s）配速，
+3. **状态流的丢帧判据（P0c）**：物理环把「最新快照 + seq」交给发送协程，60 Hz 时不排队。
+   `/health` 的 `frames_published / frames_skipped` 是这两个数：健康本机客户端 `skipped` 应为 0。
+   实测 60 s：`frames=3596 / dropped=0 / server_skipped=0`（P0b 是 3536–3558 / 39–57）。
+   两个坑都踩过：①发送卡在物理 tick 里（P0b 的 1 格队列）；②循环落后时连着 tick 两次而不
+   `await`，发送协程只看到后一条快照 → 那条被合并成丢帧。所以 `sim_loop` 每 tick 至少
+   `await asyncio.sleep(0)` 让出一次事件循环（Windows 定时器粒度 ~15.6 ms，sleep 偶尔睡成两个周期）。
+   判据取自 `testbed/scripts/probe-ws.mjs`：frames ≥ 3600×99.7%、dropped ≤ 5（60 s 窗）。
+
+4. **仿真时间比墙钟慢 0.96 倍**：每 tick 固定 8×2 ms = 0.016 s 仿真，但按 60 Hz（1/60 s）配速，
    所以 30 s 仿真要 31.3 s 墙钟。要 1:1 就把 `--hz` 设 62.5（`SIM_HZ`）。
    （`--walk` 不配速，它量的是仿真真值与时延分布，不是实时性。）
-4. **只有地板**：没有家具、没有房间盒子、没有撞墙。P1 用 `scene.json` 生成。
-5. **往返延迟没测**：P0 计划里的「P95 ≤15 ms」本次**没测**（浏览器客户端还没接，
+5. **只有地板**：没有家具、没有房间盒子、没有撞墙。P1 用 `scene.json` 生成。
+6. **往返延迟没测**：P0 计划里的「P95 ≤15 ms」本次**没测**（浏览器客户端还没接，
    只有本机 WS 回环）。TBD：谁接 `g1-body.ts` 的 WS 客户端谁测，用同一台机器。
-6. **sim2sim 的物理差没逐项对**：训练端 MJCF 的 armature（0.0102/0.0251）、frictionloss（0.1）、
+7. **sim2sim 的物理差没逐项对**：训练端 MJCF 的 armature（0.0102/0.0251）、frictionloss（0.1）、
    默认关节阻尼（2）与我们 `g1.xml`（0.01 / 0.3 / 无）**不一致**，本次没做参数对齐，
    只证明「这套参数下能走」。要做落地前的置信度，得先把这几项对齐再重测。
-7. **控制频率的口径**：任务书写过「每控制帧 20 个 2 ms 物理步」（=40 ms=25 Hz），与训练端
+8. **控制频率的口径**：任务书写过「每控制帧 20 个 2 ms 物理步」（=40 ms=25 Hz），与训练端
    `ctrl_dt=0.02`（10 步）冲突。**这里按训练端 10 步 / 50 Hz**：25 Hz 会同时改 `phase_dt`
    和动作保持时间，等于换了一个策略，不是「照训练端 scale」。
-8. **高度定义**：本文件的 `height` 是「最高网格顶点」，换模型/换姿态口径会变，别跨模型比。
+9. **高度定义**：本文件的 `height` 是「最高网格顶点」，换模型/换姿态口径会变，别跨模型比。
    （POLICY 行走时 pelvis z 稳定在 0.72–0.76；T-pose 直腿站在 0.792，两者不是一回事。）

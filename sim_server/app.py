@@ -135,40 +135,85 @@ class SimRuntime:
         }
 
 
-class Hub:
-    """每客户端一个 1 格队列：发不动就丢旧帧，绝不阻塞物理。"""
+class Client:
+    """一个 WS 客户端的发送状态：有新快照就置位，发完记 seq。
+
+    P0b 的「每客户端 1 格队列」是物理 tick 里塞、发送协程里取：send 还没回来，下一个
+    tick 就把队列占满，于是丢旧帧（60 s 实测 3536–3558 / 3600，dropped 39–57）。
+    P0c 把队列换成「最新快照 + seq」：物理环只管 publish，发送协程自己按 seq 取最新。
+    """
+
+    __slots__ = ("event", "sent", "skipped")
 
     def __init__(self) -> None:
-        self.clients: set[asyncio.Queue[str]] = set()
+        self.event = asyncio.Event()
+        self.sent = 0
+        self.skipped = 0
 
-    async def broadcast(self, snapshot: dict[str, Any]) -> None:
-        if not self.clients:
-            return
-        text = json.dumps(snapshot, separators=(",", ":"))
-        for q in list(self.clients):
-            if q.full():
-                try:
-                    q.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-            try:
-                q.put_nowait(text)
-            except asyncio.QueueFull:
-                pass
+
+class Hub:
+    """最新快照广播：不排队、不阻塞物理，发送端按 seq 合并中间帧。"""
+
+    def __init__(self) -> None:
+        self.clients: set[Client] = set()
+        self.latest = ""
+        self.seq = 0
+        self.skipped = 0  # 所有客户端累计被合并掉的中间帧（只有慢客户端会让它涨）
+
+    def attach(self) -> Client:
+        client = Client()
+        self.clients.add(client)
+        return client
+
+    def detach(self, client: Client) -> None:
+        self.clients.discard(client)
+
+    def publish(self, snapshot: dict[str, Any]) -> None:
+        self.latest = json.dumps(snapshot, separators=(",", ":"))
+        self.seq += 1
+        for client in tuple(self.clients):
+            client.event.set()
+
+
+async def _sender(ws: WebSocket, client: Client, hub: Hub) -> None:
+    """独立发送协程：每来一条新快照发**最新**那条（60 Hz）。
+
+    健康客户端（本机回环）一帧不少；跟不上的客户端在这里自动跳过中间帧 —— 丢的是
+    它自己没消化完的帧，物理环和别的客户端完全不受影响。
+    """
+    while True:
+        await client.event.wait()
+        client.event.clear()
+        seq = hub.seq
+        if seq <= client.sent:
+            continue
+        text = hub.latest
+        await ws.send_text(text)
+        gap = seq - client.sent - 1
+        if gap > 0:
+            client.skipped += gap
+            hub.skipped += gap
+        client.sent = seq
 
 
 async def sim_loop(rt: SimRuntime, hub: Hub) -> None:
-    """定步长主循环：每 tick 推 8 个物理步（0.016 s 仿真），按墙钟 60 Hz 配速。"""
+    """定步长主循环：每 tick 推 8 个物理步（0.016 s 仿真），按墙钟 60 Hz 配速。
+
+    这里只 tick + publish 最新快照，**不做任何 WS I/O**：发送归 _sender，配速只由
+    物理环自己决定（P0c 的丢帧根因就是发送卡在物理 tick 里）。
+    """
     period = 1.0 / rt.tick_hz
     next_at = time.perf_counter()
     while True:
         rt.tick()
-        await hub.broadcast(rt.snapshot())
+        hub.publish(rt.snapshot())
         next_at += period
         delay = next_at - time.perf_counter()
-        if delay > 0:
-            await asyncio.sleep(delay)
-        else:
+        # 每 tick 至少让出一次事件循环：Windows 的定时器粒度 ~15.6 ms，sleep 偶尔会
+        # 睡成 2 个周期；醒来后如果连着 tick 两次而不 await，发送协程只来得及看到后一条
+        # 快照 → 那条被合并掉、客户端看到一个 0.032 s 的跳变（=丢帧）。
+        await asyncio.sleep(delay if delay > 0 else 0)
+        if delay <= 0:
             next_at = time.perf_counter()  # 落后就重新对齐，不追帧
 
 
@@ -200,6 +245,9 @@ def create_app(runtime: SimRuntime | None = None, tick_hz: float = TICK_HZ) -> F
             "steps_per_tick": STEPS_PER_TICK,
             "tick_hz_nominal": rt.tick_hz,
             "clients": len(hub.clients),
+            # P0c：发布/合并计数——发送环解耦后，健康客户端不该让 skipped 增长
+            "frames_published": hub.seq,
+            "frames_skipped": hub.skipped,
             "last_error": rt.last_error,
             # P2b：模式机对外的全部可见状态（浏览器只需要 snapshot 里的 "mode"）
             "mode": rt.mode.info(),
@@ -209,20 +257,24 @@ def create_app(runtime: SimRuntime | None = None, tick_hz: float = TICK_HZ) -> F
     @app.websocket("/sim")
     async def ws_sim(ws: WebSocket) -> None:
         await ws.accept()
-        q: asyncio.Queue[str] = asyncio.Queue(maxsize=1)
-        hub.clients.add(q)
+        client = hub.attach()
         reader = asyncio.create_task(_reader(ws, rt))
+        sender: asyncio.Task[None] | None = None
         try:
+            # 首帧带 geom.names / geom.mesh / geom.meshMeta（网格资产只在这里给一次）
             await ws.send_text(json.dumps(rt.snapshot(full=True), separators=(",", ":")))
-            while True:
-                await ws.send_text(await q.get())
+            client.sent = hub.seq  # 首帧之后的最新 seq 之前不补发（别重复推旧帧）
+            sender = asyncio.create_task(_sender(ws, client, hub))
+            await sender
         except (WebSocketDisconnect, RuntimeError):
             pass
         except Exception as exc:  # 单连接出错不拖垮物理环
             print(f"[sim] ws error: {exc!r}", file=sys.stderr)
         finally:
-            hub.clients.discard(q)
+            hub.detach(client)
             reader.cancel()
+            if sender is not None:
+                sender.cancel()
 
     return app
 

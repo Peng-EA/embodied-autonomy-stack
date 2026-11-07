@@ -20,6 +20,10 @@ node scripts/check-params.mjs   # 与 sim/config.py 对账 @mirror 常量
 
 ## 注意
 
+- **G1 的网格**（P0c）：WS 档（`?sim` 默认就是）从 `public/mujoco/g1/` 的 35 个 STL 画 G1，
+  网格系取服务端首帧的 `geom.meshMeta`，每帧只吃 `geom.xpos/xmat`；数学在
+  `src/console/g1-mesh.ts`，与 `node scripts/probe-mesh.mjs` 共用一份（判据：mesh_count ≥30、
+  包围盒 1.30–1.36 m）。manifest/网格缺失时退回占位角色并打 sys 事件，不静默。
 - 本机 `%TEMP%` 可能不可用；vite/esbuild 报 "Access is denied" 时把 `TEMP`/`TMP` 指到仓库 `.tmp/`。
 - `dist/` 被 gitignore；站点构建时由 CI 拷进 `site/public/testbed/`。
 - 本机与 CI 都用 npm（`package-lock.json` 已提交），不要混用 pnpm。

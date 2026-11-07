@@ -11,6 +11,11 @@
 
 ### Added
 
+- **WS 档画出真 G1 + 发送环解耦（P0c）**：状态帧首帧带 `geom.mesh/meshMeta`（geom 名全是 `None`，而且 MuJoCo 网格系
+  含体积质心/主轴，STL 里没有），新增 `testbed/src/console/g1-mesh.ts`（零依赖 STL 解析 + 烘焙 + 世界矩阵）与 `g1-ws-mesh.ts`，
+  浏览器与 Node 探针共用同一份数学；烘焙顶点与 MuJoCo `mesh_vert` 逐 geom 世界包围盒差 1e-7 m。
+  服务端改为「最新快照 + 每客户端独立发送协程」，且 `sim_loop` 每 tick 至少 `sleep(0)`（Windows 定时器 15.6 ms 粒度会连跑两 tick）。
+  实测 n=2：60 s 收 3590–3597 帧、**丢失 0**（此前 3536–3558 / 丢 37–57）、p95 2.20 ms、35 块网格整机高 1.3274 m。
 - **场景单一真源 + G1 真撞桌（P1）**：新增 `sim_server/scene.json`（9 件家具的名字/中心/半长逐位搬自 `physics.ts`，
   含出生点）与 `sim_server/scene.py`（y-up→z-up 只换算一次，floor 顶面必须 0.0）；`world.py` 用 MjSpec 加 `scene_<id>` box，
   `g1.xml` 未改；新增 `scripts/check-scene-parity.mjs` 双向比对 22 项。

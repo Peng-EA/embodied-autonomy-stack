@@ -1,4 +1,6 @@
 import type { Body, BodyCommand, BodyState } from './body.ts';
+import { threeToMjMat, threeToMjPos } from './g1-mesh.ts';
+import type { MeshMeta, MjPose } from './g1-mesh.ts';
 
 // G1 的 WS 版身体：状态来自 Python 权威环（sim_server/ · ws://127.0.0.1:8788/sim）。
 // 契约（body.ts 的 BodyCommand / BodyState / Body）一个字不改——本文件只换"状态从哪来"。
@@ -34,7 +36,15 @@ export interface G1WsFrame {
   speed: number;
   blocked: boolean;
   joints: Record<string, number>;
-  geom?: { xpos?: number[]; xmat?: number[]; names?: string[] };
+  geom?: {
+    xpos?: number[];
+    xmat?: number[];
+    names?: string[];
+    /** P0c：每个 geom 的 mesh 资产名（非网格 geom 为 ""），只在首帧给 */
+    mesh?: string[];
+    /** P0c：mesh 资产名 -> MuJoCo 网格系（pos/quat/scale），只在首帧给 */
+    meshMeta?: Record<string, MeshMeta>;
+  };
   contacts?: number;
 }
 
@@ -91,6 +101,12 @@ export class G1BodyWs implements Body {
   private skipGapOnce = false;
 
   private lastFrame: G1WsFrame | null = null;
+  /** 首帧的 geom->mesh 映射（P0c；没收到 = 空，调用方据此退回占位角色） */
+  private geomMeshNames: string[] = [];
+  private meshMetaMap: Record<string, MeshMeta> | null = null;
+  /** pose() 的缓存：同一帧只转一次（three -> mj 是 80 个 geom 的矩阵乘） */
+  private poseCache: MjPose | null = null;
+  private poseCacheFrame = -1;
   private lastFrameAt = 0;
   private lastSentAt = -1e9;
   private degradedSince = 0;
@@ -171,6 +187,52 @@ export class G1BodyWs implements Body {
   /** 最后一帧的服务端时间戳（没帧 = null） */
   lastTsim(): number | null {
     return this.lastFrame ? this.lastFrame.tSim : null;
+  }
+
+  /** 原始状态帧（探针/调试用；没有帧 = null） */
+  frame(): G1WsFrame | null {
+    return this.lastFrame;
+  }
+
+  /** 首帧给的 geom -> mesh 资产名（非网格 geom 为 ""）；没收到 = [] */
+  geomMesh(): readonly string[] {
+    return this.geomMeshNames;
+  }
+
+  /** 首帧给的网格系（pos/quat/scale）；没收到 = null（此时画不出网格） */
+  meshMeta(): Record<string, MeshMeta> | null {
+    return this.meshMetaMap;
+  }
+
+  /**
+   * 最近一帧的位姿，**翻回 MuJoCo 系**给 G1View.sync 用（z 上）。
+   *
+   * 服务端发的是 three 系（y 上），而 G1View 的 container 已经绕 x 转了 -90°、顶点也是
+   * MuJoCo 网格系烘焙的，所以这里必须翻回去一次；否则整机躺着。没有帧 = null。
+   */
+  pose(): MjPose | null {
+    const f = this.lastFrame;
+    const geom = f?.geom;
+    if (!geom?.xpos?.length || !geom.xmat?.length) return null;
+    const n = Math.floor(geom.xpos.length / 3);
+    if (this.poseCache && this.poseCacheFrame === this.counter.frames && this.poseCache.ngeom === n) {
+      return this.poseCache;
+    }
+    const xpos = new Float64Array(n * 3);
+    const xmat = new Float64Array(n * 9);
+    for (let g = 0; g < n; g++) {
+      const p = g * 3;
+      const [mx, my, mz] = threeToMjPos(geom.xpos[p], geom.xpos[p + 1], geom.xpos[p + 2]);
+      xpos[p] = mx;
+      xpos[p + 1] = my;
+      xpos[p + 2] = mz;
+      const r = g * 9;
+      const m = threeToMjMat(geom.xmat.slice(r, r + 9));
+      xmat.set(m, r);
+    }
+    this.poseCache = { geomXpos: xpos, geomXmat: xmat, ngeom: n };
+    this.poseCacheFrame = this.counter.frames;
+    return this.poseCache;
   }
 
   close(): void {
@@ -336,6 +398,9 @@ export class G1BodyWs implements Body {
     this.skipGapOnce = false;
 
     if (!this.jointNames.length) this.jointNames = Object.keys(f.joints);
+    // P0c：网格资产只在首帧给一次（35 个 STL 的网格系 + 每个 geom 对应哪块网格）
+    if (f.geom?.mesh?.length && !this.geomMeshNames.length) this.geomMeshNames = f.geom.mesh;
+    if (f.geom?.meshMeta && !this.meshMetaMap) this.meshMetaMap = f.geom.meshMeta;
     this.lastFrame = f;
     this.lastFrameAt = performance.now();
     this.counter.frames++;

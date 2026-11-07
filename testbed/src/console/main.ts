@@ -14,6 +14,7 @@ import { CapsuleBody } from './capsule-body.ts';
 import { G1Body } from './g1-body.ts';
 import { G1BodyWs } from './g1-body-ws.ts';
 import { G1View } from './g1-view.ts';
+import { buildG1WsView } from './g1-ws-mesh.ts';
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -629,7 +630,33 @@ async function openG1(): Promise<void> {
       });
       (window as any).__g1ws = g1ws;
       pushLog('sys', 'WS 身体就绪 · ' + SIM_WS + ' · ' + g1ws.jointNames.length + ' 关节 · 状态来自 Python 权威环（60 Hz）');
-      pushLog('sys', '这一档没有网格：G1 模型仍由 wasm 提供，想看模型加 ?sim=wasm（几何搬服务端是 P0c）');
+
+      // P0c：网格从 public/mujoco/g1 的 STL 加载，位姿用服务端首帧的 geom.meshMeta +
+      // 每帧 geom.xpos/xmat。加载失败/缺件都不静默：sys 事件 + 占位角色兜底。
+      setAction('加载 G1 网格…');
+      try {
+        const mesh = await buildG1WsView(MJ_BASE, g1ws, (d, t, what) => {
+          if (d === 0 || d === t || d % 8 === 0) setAction('G1 网格 ' + d + '/' + t + ' · ' + what.replace('.STL', ''));
+        });
+        g1view = mesh.view;
+        scene.add(g1view.group);
+        (window as any).__g1view = g1view;
+        (window as any).__char = char;
+        (window as any).THREE = THREE;
+        (window as any).__camera = camera;
+        markBody();
+        pushLog(
+          'sys',
+          'G1 网格就绪 · ' + mesh.meshCount + ' 块 · ' + Math.round(mesh.triangles / 1000) + 'k 三角 · 高 ' +
+            mesh.height.toFixed(2) + ' m（STL 来自 manifest，位姿来自服务端首帧）',
+        );
+        if (mesh.missing.length) {
+          pushLog('sys', 'G1 网格缺 ' + mesh.missing.length + ' 块（' + mesh.missing.slice(0, 3).join(', ') + '）：这些零件不画，其余照常');
+        }
+      } catch (e) {
+        pushLog('sys', 'WS 没有可用网格 → 退回占位角色：' + (e as Error).message);
+      }
+      markBody();
       return;
     } catch (e) {
       pushLog('sys', 'WS 连接失败：' + (e as Error).message + ' → 降级浏览器内 wasm');
@@ -848,7 +875,11 @@ function animate() {
       blockedFrames = 0;
     }
 
-    if (bodyKind === 'g1' && g1 && g1view) g1view.sync(g1.pose());
+    // 两个 G1 后端同一份渲染：wasm 档直接给 pose()，WS 档从最近一帧翻回 MuJoCo 系
+    if (bodyKind === 'g1' && g1view) {
+      const pose = g1 ? g1.pose() : g1ws?.pose();
+      if (pose) g1view.sync(pose);
+    }
   } else {
     char.position.x += vx * dt;
     char.position.z += vz * dt;
