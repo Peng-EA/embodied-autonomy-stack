@@ -333,6 +333,13 @@ let bodyKind: 'capsule' | 'g1' = 'capsule';
 let blockedFrames = 0;
 let lastActAt = -99;
 
+/**
+ * 自主通道的**收回**开关（P4 实验场景用）。默认 false = 不收回。
+ * 它只收紧、不放宽：?auto=1 仍是放行的必要条件；置位之后 L4 再想动就会被 cmd-gate 拒
+ * （日志里能看到"L4 想走但未授权"与 denied 计数增长）。
+ */
+let autonomyRevoked = false;
+
 // P0d：上行指令的唯一出处。用户没真输入之前，它只发 (0,0,0)；
 // 首帧 state 到手后再把 yaw 零位对齐到真实朝向（见 cmd-gate.ts）。
 //
@@ -341,7 +348,8 @@ let lastActAt = -99;
 // 不做"值看着像就放行"的宽松匹配）。
 const gate = new CmdGate({
   autonomyEnabled: () =>
-    new URLSearchParams(location.search).get('auto') === '1' || (window as any).__allowAutonomy === true,
+    !autonomyRevoked &&
+    (new URLSearchParams(location.search).get('auto') === '1' || (window as any).__allowAutonomy === true),
 });
 (window as any).__gate = gate;
 
@@ -616,6 +624,23 @@ let l4DeniedKey: string | null = null;
 let l4DeniedEvents = 0;
 
 /**
+ * L4 诊断计数（P4 无头探针 testbed/scripts/run-l4.mjs 要数 request/adopt/被拒，
+ * 以及"这一轮为什么没触发"的原因）。**只记账，不参与任何控制判定**：
+ * 下面的触发条件一个数都没动，这里只是把每轮的分支结果留下来。
+ */
+const l4Diag = {
+  requests: 0,
+  adoptions: 0,
+  denials: 0,
+  /** 最近一轮没进 request 的原因（''= 进了；init= 还没跑过） */
+  skipped: 'init',
+  lastRequestAt: -99,
+  lastProvider: 'n/a',
+  lastWhy: '',
+  lastTarget: null as null | { x: number; z: number },
+};
+
+/**
  * L4 意图**唯一的采纳口**（P0e）。自主计划要驱动身体，先得 gate.authorize('autonomy')：
  * 默认关 → 拒绝、计划不落到 target/mode（cmd 因此恒 0）、打一条 sys，同一状态只打一次。
  * ?auto=1 打开（或 window.__allowAutonomy = true）之后才照原来的路采纳。
@@ -631,12 +656,17 @@ function adoptL4Intent(out: PlanOutcome): void {
     if (l4DeniedKey !== key) {
       l4DeniedKey = key;
       l4DeniedEvents++;
+      l4Diag.denials++;
       pushLog('sys', 'L4 想走但未授权（?auto=1 开启）· ' + (out.intent.why || out.intent.kind));
       setAction('L4 未授权 · 拒动');
     }
     return;
   }
   l4DeniedKey = null;
+  l4Diag.adoptions++;
+  l4Diag.lastProvider = out.provider;
+  l4Diag.lastWhy = out.intent.why || '';
+  l4Diag.lastTarget = { x: goal.x, z: goal.z };
 
   target = new THREE.Vector3(goal.x, 0, goal.z);
   mode = 'walk';
@@ -647,13 +677,17 @@ function adoptL4Intent(out: PlanOutcome): void {
 }
 
 setInterval(async () => {
-  if (paused || planning) return;
-  if (!usingModel) return;
-  if (vitals.pressure() < 0.78) return;
-  if (elapsed - lastPlanAt < 9) return;
+  // 下面四个 return 的条件一个字都没改；只是把"这一轮为什么没进 request"记进诊断计数。
+  if (paused || planning) { l4Diag.skipped = paused ? 'paused' : 'in_flight'; return; }
+  if (!usingModel) { l4Diag.skipped = 'model_not_loaded'; return; }
+  if (vitals.pressure() < 0.78) { l4Diag.skipped = 'pressure_below_0.78'; return; }
+  if (elapsed - lastPlanAt < 9) { l4Diag.skipped = 'cooldown_9s'; return; }
 
   planning = true;
   lastPlanAt = elapsed;
+  l4Diag.requests++;
+  l4Diag.lastRequestAt = elapsed;
+  l4Diag.skipped = '';
   const simMs = Math.round(elapsed * 1000);
   const out = await planner.request(vitals, affect, simMs);
   planning = false;
@@ -1098,6 +1132,66 @@ if (DEBUG) {
       } catch {
         return null;
       }
+    },
+    /** L1 内感受现值（页面 Vitals 的真值；压力 = 三个需求里最强的那个） */
+    vitals: () => ({
+      pressure: vitals.pressure(),
+      hunger: vitals.hunger,
+      thirst: vitals.thirst,
+      energy: vitals.energy,
+      temperature: vitals.temperature,
+      dominant: vitals.dominantNeed(),
+    }),
+    /** L4 计数器 + 最近一轮没触发的原因（只读；见 l4Diag 的注释） */
+    l4: () => ({
+      requests: l4Diag.requests,
+      adoptions: l4Diag.adoptions,
+      denials: l4Diag.denials,
+      deniedEvents: l4DeniedEvents,
+      skipped: l4Diag.skipped,
+      lastRequestAt: l4Diag.lastRequestAt,
+      provider: l4Diag.lastProvider,
+      why: l4Diag.lastWhy,
+      target: l4Diag.lastTarget,
+      planning,
+      lastPlanAt,
+      planner: { provider: planner.provider, latencyMs: planner.latencyMs, lastAgeMs: planner.lastAgeMs },
+    }),
+    /** L2 反射（页面同一个 reflex 对象；只读） */
+    l2: () => ({ count: reflex.count, armedAt: reflex.armedAt, cooldown: reflex.cooldown, blockedFrames }),
+    /** 页面运行态（只读） */
+    status: () => ({
+      mode,
+      hasTarget: !!target,
+      target: target ? { x: target.x, z: target.z } : null,
+      x: char.position.x,
+      z: char.position.z,
+      y: char.position.y,
+      elapsed,
+      usingModel,
+      paused,
+      frameMode: g1ws?.frame()?.mode ?? null,
+      wsDegraded: g1ws ? g1ws.degraded : null,
+    }),
+    /**
+     * 收回 / 恢复自主授权（P4 实验控制）：on=false → L4 的后续意图一律被 cmd-gate 拒。
+     * 只收紧不放宽（?auto=1 仍是必要条件），用来把"任务达成之后"的窗口从后续不可达计划里摘出来。
+     */
+    setAutonomy: (on: boolean) => {
+      autonomyRevoked = on !== true;
+      return { autonomyEnabled: gate.autonomyEnabled, revoked: autonomyRevoked, denied: gate.denied };
+    },
+    /**
+     * 注入钩子（P4）：把 L1 的某一项需求设到一个值，把内感受压力推到 L4 触发线（0.78）以上。
+     * **只改初值**：之后照旧由 vitals.tick() 积分推进，阈值与判据一个都不动。
+     * 名字里带 inject 是有意的——探针会在日志里记 event=inject，不许假冒"自然增长的需求"。
+     */
+    injectNeed: (k: 'hunger' | 'thirst' | 'energy', v: number) => {
+      if (k !== 'hunger' && k !== 'thirst' && k !== 'energy') throw new Error('unknown need: ' + k);
+      if (!Number.isFinite(v)) throw new Error('injectNeed 需要有限数');
+      const before = vitals.pressure();
+      vitals[k] = Math.max(0, Math.min(1, v));
+      return { need: k, value: vitals[k], pressureBefore: before, pressureAfter: vitals.pressure() };
     },
   };
 }

@@ -11,6 +11,12 @@
 
 ### Added
 
+- **四层闭环验收脚本（P4）**：新增 `testbed/scripts/run-l4.mjs`——Edge headless 开 `?body=g1&auto=1`，让页面的 L1→L3→L4
+  经 `cmd-gate(autonomy)` 驱动 WS 里的真 G1，每 40 ms 采样写 `testbed/logs/l4-*.jsonl`（全部 `source:"ws"`）。
+  实测 n=3：**2 过 1 摔**。链路可复现（L4 采纳 1 次、压力 0.88→0.52、走了 ≥1 m、到点停），
+  但稳定性未达标——摔的那轮日志显示 L2 反射 `walk→idle` 后 `POLICY→HOLD` 交接时机器仍带 0.21 m/s 动量，
+  1.3 s 内涨到 1.35 m/s 后侧翻。挂账 P5（先在 POLICY 内刹到 |v|<0.05 再交接），判据不降。
+  `main.ts` 只加了 debug 门控的诊断/注入钩子（0.78、9 s、STALE 1500、MOVE_* 都没动）。
 - **P2a-2：默认 mimic 片段换成 `bonus/B_HandsUp`，`--mimic` 七项全绿**：`policies/g1_mimic.py` 引入
   `CLIPS` 注册表（4 段：B_HandsUp / V_Rocamena / B_HandsChop / dance J_Dance0_StepTouch，每段钉文件名、
   字节数、sha256、帧数；字节数与 sha256 取自 HF tree API 的 `size` 与 `lfs.oid`，与原来钉的 dance sha256 逐位一致）；
