@@ -3,8 +3,9 @@
 协议（与 docs/plan-g1-gait-ik-collision.md 的 P0 一节一致）：
 
   C -> S  {"t": <client_ts>, "cmd": {"vx": <m/s>, "vz": <m/s>, "yaw": <rad>}, "jointTargets": {...}|null}
+          P2a 追加：{"mimic": "play"|"stop"}   —— 播一段现成 mimic 动作（动作，不是走路）
   S -> C  {"tSim", "x", "y", "z", "yaw", "speed", "blocked", "joints",
-           "geom": {"xpos": [...], "xmat": [...]}, "contacts": <n>, "mode": "HOLD"|"POLICY"}
+           "geom": {"xpos": [...], "xmat": [...]}, "contacts": <n>, "mode": "HOLD"|"POLICY"|"MIMIC"}
 
 - x/y/z 是 three 右手系（y 向上），来自 sim_server.world 的转换；浏览器不用再翻。
 - joints 是 29 个铰链关节名 -> 角度（rad），BodyState.joints 同构。
@@ -18,6 +19,12 @@
 P2b 之后 cmd 会产生运动了，但**两段是两套机构**：cmd 静止 → HOLD（kp=500 保位），
 cmd 有速度 → POLICY（kp=75 的策略）。所以「站着」永远是 HOLD 干的，
 不许把它算成策略的能力（策略零命令 5 s 漂 0.387 m，见 policies/SPIKE.md §2）。
+
+P2a 追加第三段 **MIMIC**（modes.py 的第三套机构，动作源 = 别人训的 ONNX，
+HF exptech/g1-moves，CC-BY-4.0，见 policies/g1_mimic.py）：
+- 客户端发 {"mimic":"play"} → 先在 HOLD 站定 0.5 s，ramp 0.6 s 进片头，然后 50 Hz 播完整段，
+  播完自动 ramp 回 HOLD；送 {"mimic":"stop"} 或给速度命令都会提前退场（同一套 ramp）。
+- 它不是走路：MIMIC 与 POLICY 互斥，cmd 有速度时 MIMIC 让路、退回 HOLD 再交棒。
 
 跑法（仓库根目录，端口默认 8788，server 的 L4 服务占 8787）：
   server/.venv/Scripts/python.exe -m sim_server.app --port 8788
@@ -105,6 +112,16 @@ class SimRuntime:
                     self.mode.set_joint_targets(None)
             else:
                 self.last_error = "jointTargets must be object or null"
+        # P2a：mimic 请求（动作通道）。只在 HOLD 起播；POLICY 在跑时先排队，回 HOLD 后再进场。
+        if "mimic" in msg:
+            want = msg["mimic"]
+            if want in (True, "play", "start", 1):
+                self.mode.start_mimic()       # 权重在进场时才加载，坏了走 try_load_mimic 只报一次
+            elif want in (False, "stop", "cancel", 0, None):
+                self.mode.stop_mimic()
+            else:
+                self.last_error = "mimic must be 'play' or 'stop'"
+
         # 注意：jointTargets 只在 HOLD 生效；POLICY 的目标归网络（modes.py 里说明）
 
     # ---------- 每 tick ----------
@@ -252,6 +269,14 @@ def create_app(runtime: SimRuntime | None = None, tick_hz: float = TICK_HZ) -> F
             # P2b：模式机对外的全部可见状态（浏览器只需要 snapshot 里的 "mode"）
             "mode": rt.mode.info(),
             "infer_p95_ms": rt.mode.infer_p95_ms(),
+            # P2a：动作通道（mimic）的进度；不加载权重时为 None
+            "mimic": {
+                "phase": rt.mode.info()["mimic_phase"],
+                "clip": rt.mode.info()["mimic_clip"],
+                "frame": rt.mode.info()["mimic_frame"],
+                "frames": rt.mode.info()["mimic_frames"],
+                "error": rt.mode.info()["mimic_error"],
+            },
         }
 
     @app.websocket("/sim")

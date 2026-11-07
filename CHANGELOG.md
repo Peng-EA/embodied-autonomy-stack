@@ -11,6 +11,30 @@
 
 ### Added
 
+- **P2a-2：默认 mimic 片段换成 `bonus/B_HandsUp`，`--mimic` 七项全绿**：`policies/g1_mimic.py` 引入
+  `CLIPS` 注册表（4 段：B_HandsUp / V_Rocamena / B_HandsChop / dance J_Dance0_StepTouch，每段钉文件名、
+  字节数、sha256、帧数；字节数与 sha256 取自 HF tree API 的 `size` 与 `lfs.oid`，与原来钉的 dance sha256 逐位一致）；
+  新增 `selfcheck --mimic-clip <clip>`（不认识就 exit 2 并列出可用 clip）与 `--mimic-candidates`
+  （逐段跑并打候选表；判据只有一份实现，两个入口共用）。默认 clip 441 帧 / 8.82 s 实测（n=1）：
+  frames 441、joint_out_of_limit 0、z_min 0.7766、fell False、return_to_hold_s 0.208、infer_p95 0.228 ms
+  → **七项全绿 exit 0**。候选表：B_HandsUp PASS（选为默认）/ V_Rocamena FAIL（3 处越限 + 摔，z_min 0.0606）/
+  B_HandsChop PASS（35.3 s，只作对照）/ dance J_Dance0_StepTouch FAIL（1 处 waist_roll）。
+  **判据、阈值、`jnt_solref`、`--walk`/HOLD 行为全未改**：`--mimic --mimic-clip dance/J_Dance0_StepTouch`
+  仍如实报 1 处越限（exit 1），作为负结果保留；换一段不顶满限位的片段**不等于**「越限被修好了」，
+  1e-3 的来历与已知边界见 `sim_server/README.md` §4c。
+
+- **G1 会做动作了：接入 HF `exptech/g1-moves` 的 mimic 策略（P2a）**：新增 `sim_server/policies/g1_mimic.py`
+  （154 维 obs + `time_step` 两路输入、50 Hz、动作→位置执行器、字节数+sha256 双验）与 `modes.py` 的第三个模式 **MIMIC**
+  （HOLD 站定 0.5 s → 0.6 s ramp 进片头 → 50 Hz 播完 1949 帧 → 用 `RAMP_S` 的同一套 ramp 回 HOLD；与 POLICY 互斥）；
+  `selfcheck --mimic` 打七项；WS 新增上行 `{"mimic":"play"|"stop"}`。
+  权重 `.tmp/mimic/J_Dance0_StepTouch_policy.onnx`（2,866,582 B，sha256 `7b54888a…ff62`），
+  **第三方权重（CC-BY-4.0，Experiential Technologies / mjlab 训练），不是我们训的，引用必须留署名**。
+  实测（n=1）：1949 帧 / 38.98 s 播完、z_min 0.6182 不摔、回 HOLD 0.208 s、推理 P95 0.297 ms、--walk 无退化
+  （hold 漂 0.0002 / 5 s 0.5531 m/s / 30 s 0.5711 m/s 16.20 m / 0 超限 / switch no_fall=True）。
+  **负结果**：`joint_out_of_limit=1` —— waist_roll 在 t≈18.1 s 越 +0.52 rad 上限 0.0144 rad（参考动作自己就顶到该上限
+  +0.520，MuJoCo 关节限位是软约束）；把限位约束收紧能把越限压到 0.0011 rad，但那是全局物理改动，未采纳。
+  细节与候选修法见 `sim_server/README.md` §4c。
+
 - **自主授权通道 + 网络侧四个缺陷修复（P0e）**：`cmd-gate` 增加 `autonomy` 授权来源（`?auto=1` 才生效，默认拒绝并留 sys 事件），
   使 L4 自主计划能驱动身体而不复活「加载即走」。同时修掉跨网络后暴露的 4 个缺陷：世界系/机体系速度错 90°、
   yaw 语义当角速度（残留 2.49 rad 退不出 POLICY）、步速 1.1 m/s 超出策略训练档位（改 0.6）、起步 0.3–0.4 s 内

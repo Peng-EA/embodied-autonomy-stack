@@ -15,7 +15,20 @@
    --walk **不按墙钟配速**：这里量的是仿真真值与时延分布，不是实时性；
    实时性归 P0a 的 tick_hz（那条仍然配速）。
 
-3) P1 --collide：把 G1 摆在桌子正前方、面向桌子，cmd=(0.5,0,0) 走 8 s，量「真撞上」的信号
+3) P2a --mimic：播一段现成 mimic 动作（HF exptech/g1-moves，CC-BY-4.0，**不是我们训的**），
+   从 HOLD 进场、播完整段、回 HOLD，打印
+     server/.venv/Scripts/python.exe -m sim_server.selfcheck --mimic
+     输出：frames= / duration_s= / joint_out_of_limit= / z_min= / fell= / return_to_hold_s=
+           / infer_p95_ms=
+   达标（任务书原文）：关节 0 超限；不摔（z_min>0.5）；播完 ≤2 s 回 HOLD。
+   clip 用 --mimic-clip 指定（注册表见 policies/g1_mimic.py 的 CLIPS）：
+   **默认 bonus/B_HandsUp**（441 帧，七项全绿）；dance/J_Dance0_StepTouch 保留为显式选项，
+   **它会如实报 1 处越限**（负结果，见 sim_server/README.md §4c）。
+   --mimic-candidates 逐段跑注册表并打候选表，是同一套判据的批量版。
+   这段跑的是**动作**不是走路：参考动作按 mjlab 的节奏（每控制步 +1 帧 = 50 帧/秒）播，
+   与数据集名义的 60 FPS 时长不同，这是照训练端取值，见 policies/g1_mimic.py 的 REF_FPS 注释。
+
+4) P1 --collide：把 G1 摆在桌子正前方、面向桌子，cmd=(0.5,0,0) 走 8 s，量「真撞上」的信号
      server/.venv/Scripts/python.exe -m sim_server.selfcheck --collide --seconds 8
      输出：blocked_at / blocked_frames / penetration / fell / went_m / hit_at
    达标（任务书原文）：blocked_frames ≤10；blocked_at > 0；penetration ≥ -0.02 m；fell=False。
@@ -73,6 +86,11 @@ JOINT_EPS = 1e-3           # 超限判定容差（mujoco 约束力会让关节�
 WALK_CMD = {"vx": 0.5, "vz": 0.0, "yaw": 0.0}
 STAND_CMD = {"vx": 0.0, "vz": 0.0, "yaw": 0.0}
 SWITCH_PHASE_S = 5.0
+
+# ---- P2a --mimic 判据（任务书原文）----
+MIMIC_FELL_Z = 0.5          # 与 --walk 同一个「摔」口径：pelvis z ≤ 0.5
+MIMIC_RETURN_MAX_S = 2.0    # 播完 ≤2 s 回 HOLD
+MIMIC_MAX_SIM_S = 120.0     # 兜底：正常约 39 s，走不完说明卡住了
 
 # ---- P1 --collide 判据（任务书原文，一个数都别动）----
 COLLIDE_CMD = {"vx": 0.5, "vz": 0.0, "yaw": 0.0}
@@ -366,6 +384,217 @@ def _run_walk(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------- P2a --mimic ----------
+
+
+def _mimic_episode(args: argparse.Namespace, clip: str | None) -> dict[str, Any]:
+    """播一整段现成 mimic 动作：进场 → 播完 → 回 HOLD。**只量不判**。
+
+    口径（判据在 _mimic_fails，别处不要另编）：
+    - frames     实际喂给策略的最后一个参考帧号 + 1（整段 = 该 clip 的参考帧数）
+    - duration_s 从「开始播」到「最后一帧播完」的仿真秒数（每控制帧 +1 帧 = 50 帧/秒）
+    - return_to_hold_s  从退场开始到 alpha 归零（真正回到 HOLD 稳态）的仿真秒数
+    - fell       全程 pelvis z ≤ 0.5（与 --walk 同一个口径）
+    - infer_p95_ms  只统计 MIMIC 自己的推理（POLICY 的样本不混进来）
+
+    clip=None 走注册表默认值；不认识 / 权重不对一律抛 MimicModelError，不拿别的片段顶替。
+    """
+    t_load = time.perf_counter()
+    world = World(args.xml)
+    hold = PoseHold(world)
+    mode = ModeController(world, hold)
+    from .policies.g1_mimic import G1MimicPolicy as _M
+    mode._mimic_factory = lambda w: _M(w, anchor_body=args.mimic_anchor, clip=clip)
+    pol = mode.load_mimic()               # 缺权重 / 尺寸 / sha256 / 未知 clip，这里当场炸
+    pinfo = pol.info()
+    load_s = time.perf_counter() - t_load
+
+    world.reset()
+    mode.reset()
+    mode.start_mimic()
+
+    z_min = float(world.data.qpos[2])
+    z_max = z_min
+    viol_max = 0
+    viol_names: list[str] = []
+    nan = False
+    frames = 0
+    t_play_start: float | None = None
+    t_play_end: float | None = None
+    t_hold: float | None = None
+    ctrl_frames = 0
+
+    while world.data.time < MIMIC_MAX_SIM_S:
+        mode.advance(STEPS_PER_TICK)
+
+        z = float(world.data.qpos[2])
+        z_min = min(z_min, z)
+        z_max = max(z_max, z)
+
+        v, names = _joint_violations(world)
+        if v > viol_max:
+            viol_max, viol_names = v, names
+
+        if mode.mimic_playing:
+            if t_play_start is None:
+                t_play_start = float(world.data.time)
+            frames = max(frames, mode._mimic_frame + 1)
+            t_play_end = float(world.data.time)
+            ctrl_frames = mode._mimic_ctrl_frames
+        elif t_play_start is not None and t_play_end is not None and t_hold is None:
+            if mode.mode == "HOLD" and mode.alpha <= 0.0:
+                t_hold = float(world.data.time)
+
+        if not world.finite():
+            nan = True
+            break
+        if mode.mimic_done:
+            if t_hold is None:
+                t_hold = float(world.data.time)
+            break
+
+    fell = bool(z_min <= MIMIC_FELL_Z)
+    duration_s = (t_play_end - t_play_start) if (t_play_start is not None and t_play_end is not None) else float("nan")
+    return_s = (t_hold - t_play_end) if (t_hold is not None and t_play_end is not None) else float("nan")
+    p95 = pol.percentile(95.0)
+
+    return {
+        "clip": pinfo["clip"],
+        "info": pinfo,
+        "load_s": load_s,
+        "xml": world.xml_path.name,
+        "nu": int(world.model.nu),
+        "timestep_ms": float(world.model.opt.timestep * 1000.0),
+        "frames": frames,
+        "duration_s": duration_s,
+        "ctrl_frames": ctrl_frames,
+        "sim_end": float(world.data.time),
+        "viol_max": viol_max,
+        "viol_names": viol_names,
+        "z_min": z_min,
+        "z_max": z_max,
+        "fell": fell,
+        "return_s": return_s,
+        "p95": p95,
+        "nan": nan,
+        "infer_n": pol.n_infer,
+        "ref_calls": pol.n_ref_calls,
+    }
+
+
+def _mimic_fails(m: dict[str, Any]) -> list[str]:
+    """七项判据的**唯一**一份实现：--mimic 与 --mimic-candidates 共用，不许各写一份。"""
+    fails: list[str] = []
+    if m["frames"] != m["info"]["frames"]:
+        fails.append(f"frames {m['frames']} != {m['info']['frames']} (clip not played to the end)")
+    if m["viol_max"] > JOINT_VIOL_MAX:
+        fails.append(f"joint_out_of_limit {m['viol_max']} > {JOINT_VIOL_MAX}")
+    if m["fell"]:
+        fails.append(f"fell=True (z_min {m['z_min']:.4f} <= {MIMIC_FELL_Z})")
+    if not (m["return_s"] == m["return_s"]) or m["return_s"] > MIMIC_RETURN_MAX_S:
+        fails.append(f"return_to_hold_s {m['return_s']} > {MIMIC_RETURN_MAX_S}")
+    if m["nan"]:
+        fails.append("nan in qpos/qvel")
+    return fails
+
+
+def _run_mimic(args: argparse.Namespace) -> int:
+    """播一整段现成 mimic 动作并打七项；clip 由 --mimic-clip 指定（默认注册表默认值）。"""
+    try:
+        m = _mimic_episode(args, args.mimic_clip)
+    except Exception as exc:              # noqa: BLE001 —— 必须原样报给复跑的人
+        print(f"FAIL: mimic 权重不可用：{exc}", file=sys.stderr)
+        return 2
+    pinfo = m["info"]
+
+    print(
+        f"xml={m['xml']} nu={m['nu']} timestep={m['timestep_ms']:.1f}ms "
+        f"load={m['load_s'] * 1000:.0f}ms"
+    )
+    print(
+        f"mimic: clip={pinfo['clip']} onnx={pinfo['onnx']} bytes={pinfo['bytes']} "
+        f"sha256={pinfo['sha256']} LICENSE={pinfo['license']} "
+        f"[third-party weights, not trained here; CC-BY-4.0 attribution required]"
+    )
+    print(
+        f"mimic: obs={pinfo['obs_dim']}({'>'.join(pinfo['obs_terms'])}) act={pinfo['n_act']} "
+        f"frames={pinfo['frames']} ctrl={pinfo['ctrl_hz']:.0f}Hz substeps={pinfo['ctrl_substeps']} "
+        f"anchor={pinfo['anchor_body']}[{pinfo['anchor_ref_index']}] "
+        f"kp={pinfo['kp_range']} kd={pinfo['kd_range']} map_by_name={pinfo['named_map_ok']}"
+    )
+    print(
+        f"play: ctrl_frames={m['ctrl_frames']} sim_end={m['sim_end']:.2f}s "
+        f"z_max={m['z_max']:.4f} anchor={pinfo['anchor_body']} "
+        f"infer_n={m['infer_n']} ref_calls={m['ref_calls']}"
+    )
+    print(
+        f"frames={m['frames']}  (reference frames {pinfo['frames']}; "
+        f"+1 frame per ctrl step @50Hz = {pinfo['frames'] / 50.0:.2f}s)"
+    )
+    print(f"duration_s={m['duration_s']:.3f}")
+    print(
+        f"joint_out_of_limit={m['viol_max']}"
+        + (f" {m['viol_names'][:3]}" if m["viol_names"] else "")
+    )
+    print(f"z_min={m['z_min']:.4f}")
+    print(f"fell={m['fell']}")
+    print(f"return_to_hold_s={m['return_s']:.3f}" if m["return_s"] == m["return_s"]
+          else "return_to_hold_s=n/a")
+    print(f"infer_p95_ms={m['p95']:.3f}  (n={m['infer_n']})")
+
+    fails = _mimic_fails(m)
+    if fails:
+        print("FAIL: " + "; ".join(fails), file=sys.stderr)
+        return 1
+    print(
+        f"PASS: frames={m['frames']} 0 over-limit, z_min={m['z_min']:.4f}>{MIMIC_FELL_Z}, "
+        f"return_to_hold={m['return_s']:.3f}s<={MIMIC_RETURN_MAX_S}s, infer_p95={m['p95']:.3f}ms"
+    )
+    return 0
+
+
+def _run_mimic_candidates(args: argparse.Namespace) -> int:
+    """逐段跑注册表里的 clip，打一张候选表（判据与 --mimic 同一份，不另立标准）。
+
+    exit：0 = 全部 clip 都能加载且**默认 clip 七项全绿**；1 = 默认 clip 有项不达标；
+    2 = 有 clip 权重/名字不对（当场打原因，不静默跳过）。
+    表里出现 FAIL 不一定算错——dance 那段是**故意保留的负结果**（参考顶到硬限位）。
+    """
+    from .policies.g1_mimic import CLIPS, DEFAULT_CLIP
+
+    print(
+        f"candidates: {len(CLIPS)} 段已注册（权重在 .tmp/mimic/，字节数 + sha256 见 "
+        f"policies/g1_mimic.py 的 CLIPS）；默认 clip = {DEFAULT_CLIP}"
+    )
+    print(
+        f"{'clip':26s} {'frames':>6s} {'dur_s':>7s} {'joint_out_of_limit':>18s} "
+        f"{'z_min':>7s} {'fell':>5s} {'return_to_hold_s':>16s} {'infer_p95_ms':>12s}  verdict"
+    )
+    load_error = False
+    default_ok = False
+    for clip in CLIPS:
+        try:
+            m = _mimic_episode(args, clip)
+        except Exception as exc:          # noqa: BLE001
+            load_error = True
+            print(f"{clip:26s} LOAD FAIL: {exc}")
+            continue
+        fails = _mimic_fails(m)
+        ok = not fails
+        ret = f"{m['return_s']:.3f}" if m["return_s"] == m["return_s"] else "n/a"
+        print(
+            f"{clip:26s} {m['frames']:6d} {m['duration_s']:7.2f} {m['viol_max']:18d} "
+            f"{m['z_min']:7.4f} {str(m['fell']):>5s} {ret:>16s} {m['p95']:12.3f}  "
+            + ("PASS" if ok else "FAIL")
+            + (f"  ({'; '.join(fails)})" if fails else "")
+        )
+        if clip == DEFAULT_CLIP:
+            default_ok = ok
+    if load_error:
+        return 2
+    return 0 if default_ok else 1
+
+
 # ---------- P1 --collide ----------
 
 
@@ -563,6 +792,23 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--hz", type=float, default=TICK_HZ, help="墙钟配速频率（默认 60；--walk 不配速）")
     ap.add_argument("--walk", action="store_true", help="P2b：HOLD/POLICY 六项 + 切换稳定性")
     ap.add_argument(
+        "--mimic", action="store_true",
+        help="P2a：播一段现成 mimic 动作（HF exptech/g1-moves，CC-BY-4.0），打七项",
+    )
+    ap.add_argument(
+        "--mimic-anchor", default=None,
+        help="覆盖参考锚点体（默认取 ONNX metadata 的 torso_link；pelvis 是对照实验用）",
+    )
+    ap.add_argument(
+        "--mimic-clip", default=None,
+        help="P2a 播哪一段（注册表见 policies/g1_mimic.py 的 CLIPS；默认 bonus/B_HandsUp，"
+             "负结果选项 dance/J_Dance0_StepTouch）",
+    )
+    ap.add_argument(
+        "--mimic-candidates", action="store_true",
+        help="P2a：逐段跑注册表里的 clip 并打候选表（判据与 --mimic 同一份）",
+    )
+    ap.add_argument(
         "--collide", action="store_true", help="P1：朝桌子走 8 s，量 blocked / 穿透 / 摔没摔"
     )
     ap.add_argument(
@@ -578,12 +824,19 @@ def main(argv: list[str] | None = None) -> int:
         help=f"collide 起点相对桌子中心线的横向偏移，m（默认 {COLLIDE_OFFSET_M}）",
     )
     args = ap.parse_args(argv)
-    if args.walk and args.collide:
-        ap.error("--walk 与 --collide 是两套自检，别一起跑")
+    picked = [
+        name for name in ("walk", "collide", "mimic", "mimic_candidates") if getattr(args, name)
+    ]
+    if len(picked) > 1:
+        ap.error("--walk / --collide / --mimic / --mimic-candidates 是四套自检，别一起跑")
     if args.walk:
         return _run_walk(args)
     if args.collide:
         return _run_collide(args)
+    if args.mimic_candidates:
+        return _run_mimic_candidates(args)
+    if args.mimic:
+        return _run_mimic(args)
     return _run_hold(args)
 
 

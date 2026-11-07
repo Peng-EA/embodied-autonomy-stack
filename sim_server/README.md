@@ -51,6 +51,13 @@ server/.venv/Scripts/python.exe -m sim_server.selfcheck --seconds 30
 # ①' P2b 自检（HOLD/POLICY 六项 + 切换稳定性；--walk 不按墙钟配速，80 s 仿真约 2.4 s 墙钟）
 server/.venv/Scripts/python.exe -m sim_server.selfcheck --walk --seconds 30
 
+# ①'' P2a 动作自检（默认 clip = bonus/B_HandsUp，441 帧 / 8.82 s；七项见 §4c）
+server/.venv/Scripts/python.exe -m sim_server.selfcheck --mimic
+
+# ①''' 候选表：逐段跑注册表里的 clip（dance 那段是**保留的负结果**，会打 FAIL）
+server/.venv/Scripts/python.exe -m sim_server.selfcheck --mimic-candidates
+server/.venv/Scripts/python.exe -m sim_server.selfcheck --mimic --mimic-clip dance/J_Dance0_StepTouch
+
 # ② 起服务（默认 127.0.0.1:8788；server/ 的 L4 服务占 8787，别撞）
 server/.venv/Scripts/python.exe -m sim_server.app --port 8788
 
@@ -59,7 +66,10 @@ curl http://127.0.0.1:8788/health
 ```
 
 `selfcheck` 的退出码：0 = 全达标；1 = 有不达标项（`FAIL: ...` 打到 stderr，
-stdout 最后四行保持原样，方便复跑比对）；2 = `--walk` 加载不到可信权重（缺文件 / 尺寸 / md5）。
+stdout 最后四行保持原样，方便复跑比对）；2 = `--walk` / `--mimic` 加载不到可信权重
+（缺文件 / 尺寸 / md5 或 sha256 / clip 名不在注册表）。
+`--mimic-candidates` 的退出码另算：0 = 全部 clip 都能加载且**默认 clip 七项全绿**；
+1 = 默认 clip 有项不达标；2 = 有 clip 加载失败。
 `--walk` 的六项判据见 §4；它**不配速**，所以墙钟 2.4 s 跑完 80 s 仿真（决定它长短的是 `--seconds`）。
 
 ## 2b. P2b：HOLD / POLICY 两个模式
@@ -89,6 +99,52 @@ DeepMind `mujoco_playground` 的 G1 joystick（速度跟踪）ONNX 导出，**�
 t+1.5 s 倒地（z 0.79→0.06）。所以 cmd 归零后仍留在 POLICY **原地踏步把速度刹到 <0.18 m/s**
 （实测 0.66 s），再交棒给 HOLD。刹车段 `mode` 仍是 `POLICY`（策略真在动），
 **不是**拿 POLICY 冒充站住：停机稳态一定落到 HOLD，刹车最多 1.5 s。
+
+## 2c. P2a：MIMIC 第三个模式（动作，不是走路）
+
+**动作源是别人的权重**：HF 数据集 `exptech/g1-moves`，每段是 `<clip>/policy_154/<clip>_policy.onnx`
+（**CC-BY-4.0**，Experiential Technologies / mjlab 训练）。引用必须写明来源与许可，**不许说成我们训的**。
+哪几段可用由 `policies/g1_mimic.py` 的 `CLIPS` 注册表管，每段钉死文件名 / 字节数 / sha256 / 帧数
+（字节数与 sha256 取自 HF tree API 的 `size` 与 `lfs.oid`，**不是猜的**；`lfs.oid` 与原来钉的
+dance 那段 sha256 逐位相同，口径已验证）。**默认 clip = `bonus/B_HandsUp`**（441 帧 / 8.82 s，七项全绿）。
+
+| clip | 帧 | 播放 | 角色 |
+|---|---|---|---|
+| `bonus/B_HandsUp` | 441 | 8.82 s | **默认**，七项全绿 |
+| `bonus/V_Rocamena` | 474 | 9.48 s | 候选，**没通过**（关节 3 处越限 + 摔倒 z_min 0.0606，见 §4c） |
+| `bonus/B_HandsChop` | 1765 | 35.30 s | 候选，七项全绿但太长，只作对照 |
+| `dance/J_Dance0_StepTouch` | 1949 | 38.98 s | **负结果，故意保留**：参考顶到 waist_roll 硬限位，如实报 1 处越限（§4c） |
+
+取法（默认那段；换 clip 就把三个路径分量一起换，字节数/sha256 照注册表核）：
+
+```bash
+curl -L -o .tmp/mimic/B_HandsUp_policy.onnx \
+  https://huggingface.co/datasets/exptech/g1-moves/resolve/main/bonus/B_HandsUp/policy_154/B_HandsUp_policy.onnx
+# 期望 1,418,901 B / sha256 24d46ee6d8b4577b634ec54252dc98ef2ba67291501392e9587635bd28c58ce5
+```
+
+文件缺失 / 尺寸或 sha256 不对 / clip 名不在注册表，一律拒绝加载（exit 2，并把可用 clip 列出来）。
+权重在 `.tmp/`（gitignore），不进仓库。
+
+| 项 | 值 | 出处 |
+|---|---|---|
+| 输入 | `obs[1,154]` **+ `time_step[1,1]`** | ONNX 本体。漏第二路直接报错 |
+| `time_step` | **参考帧号（整数，`.long()` 截断）**，不是秒 | `export_onnx.py` 的 `torch.clamp(time_step.long(), max=frames-1)`；实测 5.9 与 5 输出逐位相同 |
+| 参考帧数 | 441（默认 clip，索引 0–440；每段不同） | 用上面的夹取行为二分探出（不写死），并与注册表的 `frames_nominal` 对账 |
+| 观测顺序 | `command → motion_anchor_ori_b → base_ang_vel → joint_pos → joint_vel → actions` = 58+6+3+29+29+29 | ONNX metadata `observation_names`，与 `policy_154/env.yaml` 的 actor terms 同序 |
+| 锚点体 | `torso_link`（14 个参考体里下标 7） | metadata `anchor_body_name`；用 `pelvis` 会直接摔（实测 z_min 0.055） |
+| 6 维旋转 | `mat[..., :2].reshape(-1)` = 行优先 `[R00,R01,R10,R11,R20,R21]` | mjlab `tracking/mdp/observations.py::motion_anchor_ori_b`。**数据集自带的 `run_policy.py` 是另一种展开（列优先），照它写会摔** |
+| 动作→目标 | `default_joint_pos + actions × action_scale`（逐关节） | metadata；与 `env.yaml` 的 `use_default_offset: true` 一致 |
+| 增益 | metadata 的 `joint_stiffness`(14.25–99.10) / `joint_damping`(0.91–6.31) | 训练端执行器参数 |
+| 播放节奏 | **每控制帧 +1 帧 = 50 帧/秒**，整段 = 帧数 × 0.02 s（默认 441 帧 = 8.82 s） | mjlab `MotionCommand._update_command` 的 `time_steps += 1`；不是数据集的 60 FPS（按 60 FPS 播会快 1.2 倍） |
+
+进场/退场（`modes.py` 的 @own）：HOLD 站定 `MIMIC_SETTLE_S=0.5 s` → ramp `MIMIC_ENTRY_RAMP_S=0.6 s`
+到片头姿态（这段**不推进**运动时间）→ 50 Hz 播完 → 回 HOLD 用 `RAMP_S=0.2 s` 的同一套 ramp。
+MIMIC 与 POLICY 互斥：给速度命令会先退场再交给 POLICY。
+
+**实测（2026-11-07，本机，n=1）**：默认 clip 441 帧 / 8.82 s 播完不摔（z_min 0.7766，摔倒线 0.5），
+回 HOLD 0.208 s，推理 p95 0.228 ms，**关节 0 超限 → 七项全绿**。换成 `dance/J_Dance0_StepTouch`
+仍然报 **1 处越限**（waist_roll），那一段留着当负结果，见 §4c。
 
 ## 3. WS 协议（`ws://127.0.0.1:8788/sim`）
 
@@ -121,12 +177,15 @@ S → C（每 tick 一条，连接后先补一条 full）：
 | `geom.mesh` | **P0c 追加**，同样只在首帧：每个 geom 的 mesh 资产名（非网格 geom 为 `""`）。g1.xml 里 geom 大多没写 name（编译后是 `None` → `geom_N`），**名字反推不出网格**，所以单独给 |
 | `geom.meshMeta` | **P0c 追加**，同样只在首帧：mesh 名 → `{pos, quat, scale}`，即 MuJoCo 给该网格算的网格系。浏览器烘焙顶点要用它：`v = R(q)ᵀ·(v_stl·scale − pos)`。少这一项，整机包围盒会从 1.3228 m 虚胖到 1.4048 m、脚陷地里 8 cm（`probe-mesh.mjs` 量的就是这件事） |
 | `contacts` | `data.ncon`，活跃接触点数 |
-| `mode` | **P2b 追加**，`"HOLD"` / `"POLICY"`：当前谁在控。body.ts 契约字段一个没动 |
+| `mode` | **P2b 追加**，`"HOLD"` / `"POLICY"`；**P2a 追加** `"MIMIC"`：当前谁在控。body.ts 契约字段一个没动 |
 
 `jointTargets`：`null` = 用 keyframe `stand`；给对象则只覆盖列出的关节（其余沿用 keyframe），
 未知关节名会被拒绝并回落到 `null`（`/health` 的 `last_error` 里能看到原因）。
 值一律 clip 到执行器的 `ctrlrange`。**只在 HOLD 生效**：POLICY 的目标归网络，不接受外部改
 （不会报错，也不会生效）。
+
+**P2a 追加一条上行消息**：`{"mimic": "play"}` 起播一段动作、`{"mimic": "stop"}` 取消。
+只在 HOLD 起播（POLICY 在跑时先排队）；进度看 `/health` 的 `mimic` 段。
 
 `cmd` 现在是真会动的：给速度 → 进 POLICY，机器人在仿真里走起来，`blocked` 也随之
 可能变 `false`；给 0 → 刹车后回 HOLD 站住。**在 POLICY 稳定走之前（进 ramp 的 0.2 s 内）
@@ -151,7 +210,7 @@ S → C（每 tick 一条，连接后先补一条 full）：
 |---|---|---|---|
 | `hold_drift_30s=` | HOLD 段（cmd 恒 0）跑 30 s 的最大水平位移，m | **0.0002** | ≤0.05 |
 | `walk_5s_speed=` | cmd (0.5,0,0) 跑 5 s，逐 tick 采 pelvis 世界系水平速度取均值 | **0.5531** | ≥0.4 |
-| `walk_30s_speed= / went_m= / z_min= / fell=` | 同命令跑 30 s 的均值 / 位移 / 最低 pelvis 高度 / 是否摔（z_min≤0.5） | **0.5763 / 16.4962 / 0.7253 / False** | z_min > 0.5 |
+| `walk_30s_speed= / went_m= / z_min= / fell=` | 同命令跑 30 s 的均值 / 位移 / 最低 pelvis 高度 / 是否摔（z_min≤0.5） | **0.5711 / 16.1994 / 0.7253 / False**（2026-11-07 复跑两次逐位相同；旧记的 0.5763 是更早一次测量） | z_min > 0.5 |
 | `joints_out_of_limit=` | 关节角超出 `g1.xml` `jnt_range` 超过 1e-3 的关节数（全程取最大） | **0** | 0 |
 | `infer_p95_ms=` | 单次 `onnxruntime` 推理（不含 obs 组装）的 P95，ms | **0.101**（n=2037） | ≤5 |
 | `switch no_fall=` | HOLD 5 s → POLICY 5 s → HOLD 5 s（中途不 reset）全程 z_min > 0.5 | **True**（z_min 0.7210，刹车 0.66 s） | True |
@@ -160,6 +219,55 @@ S → C（每 tick 一条，连接后先补一条 full）：
 切换那一步最大关节目标位移 **约 11 mrad**（= 1% 的位姿差），回 HOLD 后 kp/kd 复原成
 500 / 10.32（模型原值）。`walk_30s_speed` 比命令的 0.5 高 15%——策略的速度跟踪本来就有偏差，
 不是把命令当输入。
+
+### P2a 七项（`--mimic`，默认 clip `bonus/B_HandsUp`，2026-11-07，本机，n=1，CPU 单线程）
+
+| 行 | 定义 | 实测（默认 clip） | 达标线 |
+|---|---|---|---|
+| `frames=` | 实际喂给策略的参考帧数（整段 = 441） | **441** | = 参考帧数 |
+| `duration_s=` | 从开播到最后一帧的**仿真**秒数（50 帧/秒） | **8.816** | —（n=1 记录） |
+| `joint_out_of_limit=` | 超 `jnt_range` 超过 1e-3 的关节数（全程取最大） | **0** | **0** ✅ |
+| `z_min=` | 全程最低 pelvis 高度，m | **0.7766** | >0.5（不摔）✅ |
+| `fell=` | `z_min ≤ 0.5` | **False** | False ✅ |
+| `return_to_hold_s=` | 最后一帧 → mode=HOLD 且 alpha=0 的仿真秒数 | **0.208** | ≤2.0 ✅ |
+| `infer_p95_ms=` | 单次推理 P95（不含 obs 组装；每控制帧两调：参考 + 动作） | **0.228**（n=473；同段复跑 0.295，就是这个量级的抖动） | —（P2a 计划 ≤1 ms） |
+
+### 候选表（`--mimic-candidates`，2026-11-07，本机，n=1；判据与 `--mimic` 同一份）
+
+| clip | frames | duration_s | joint_out_of_limit | z_min | fell | return_to_hold_s | infer_p95_ms | 结论 |
+|---|---|---|---|---|---|---|---|---|
+| `bonus/B_HandsUp` | 441 | 8.82 | 0 | 0.7766 | False | 0.208 | 0.277 | **PASS → 选为默认** |
+| `bonus/V_Rocamena` | 474 | 9.47 | 3 | 0.0606 | True | 0.208 | 0.308 | FAIL（越限 + 摔倒） |
+| `bonus/B_HandsChop` | 1765 | 35.30 | 0 | 0.7739 | False | 0.208 | 0.197 | PASS（太长，只作对照） |
+| `dance/J_Dance0_StepTouch` | 1949 | 38.98 | 1 | 0.6182 | False | 0.208 | 0.199 | FAIL（负结果，保留） |
+
+`infer_p95_ms` 是单次实测，跨运行有 ±0.1 ms 量级抖动（同一段两次跑出 0.228 / 0.277），
+七项里它是**记录值**、不是达标线，别拿它做精密比较。
+
+选型口径：**注册表里第一段七项全绿的当默认**（注册表顺序 = 上表顺序，`CLIPS` 第一项就是它）。
+dance 那段不删、留成 `--mimic-clip` 的显式选项，让负结果可复现；V_Rocamena 留着说明
+「帧数短 ≠ 一定绿」（它 474 帧比默认长一点，但参考里有一条膝接近限位，跟下来直接摔）。
+只挑了 3 段候选（`bonus` 优先；`karate` 按任务书要求慎选，本次没碰）。
+
+### 已知边界：dance 那段为什么必然越限（**不许写成"已修复"**）
+
+- 现象（`--mimic --mimic-clip dance/J_Dance0_StepTouch` → exit 1）：`waist_roll_joint` 在 t≈18.1 s
+  超出 +0.52 rad 上限 **0.0144 rad（0.83°）**，持续约 0.13 s（6 个状态 tick）。
+- 根因不是控制器写错，而是**参考动作自己就顶到硬限位**：该片段 waist_roll 的参考最大值 = **+0.520 rad**，
+  正好是 `jnt_range` 上限（数据集 `quality_report.json` 记这一段 0 帧越限，说明它是贴着限位被裁的）。
+  机器人以约 2.8 rad/s 跟到那里，而 MuJoCo 的关节限位是**软约束**（`jnt_solref` 默认 (0.02, 1)），
+  允许被压进去 1e-2 量级。**任何控制器跟满硬限位的参考都会吃到这个数值地板。**
+- **1e-3 的来历**：这条容差是任务书原文的判据（`selfcheck.py` 的 `JOINT_EPS`），不是本仓库从跑数里
+  调出来的参数，也不许为某一段放松。它的物理含义就是上一条：软限位在「参考贴着硬限位」时留下的残差量级——
+  把 `jnt_solref[:,0]` 从 0.02 收到 0.002，同一段动作最大越限也只从 0.0144 降到 **0.0011 rad**
+  （更硬也一样，1e-3 附近是这套软限位的数值地板）。改 `jnt_solref` 是**动全世界的物理参数**，
+  会同时改 `--walk` 与 HOLD，等于拿测床去凑一段片子，所以不采纳。
+- **这次的结论只是「换了一段不顶满限位的默认片段，默认跑七项全绿」，不是「越限被修好了」。**
+  dance 那段仍然越限，上面那条命令可以原样复现（exit 1）。要动这件事只有两条路：换片段（本次做的）、
+  或由 PM 决定 1e-3 这条判据要不要为「参考贴着硬限位」放宽（未做，也不建议）。
+- 早期试过、都否掉了的目标整形方案（记在这里免得有人再试一遍）：把目标 clip 到限位内 0.005/0.01
+  （越限反而变大到 0.0012/0.0033）、按 `soft_joint_pos_limit_factor=0.9` clip（0.023，更差）、
+  对目标做一阶平滑（0.02–0.2 s，直接摔）。
 
 ## 5. 增益从哪来（一个手填常数都没有）
 
@@ -185,6 +293,7 @@ Python 侧不另写一遍力矩。
 | `selfcheck.py` | headless 跑 N 秒，打印四行指标（`--walk` 打印 P2b 六项），exit code 0/1 |
 | `modes.py` | **HOLD/POLICY 状态机**：滞回判据、0.2 s ramp（目标 + kp + kd）、回 HOLD 前的刹车；所有 `ctrl` 都从这里出 |
 | `policies/g1_joystick.py` | ONNX 推理封装：103 维 obs 组装（照训练端）、50 Hz 控制、动作→29 个位置目标、权重 md5 校验 |
+| `policies/g1_mimic.py` | **MIMIC 的动作源**：`CLIPS` 注册表（clip / 字节数 / sha256 / 帧数）、154 维 obs 组装、每控制帧两调推理、参考帧数二分探出、动作→29 个位置目标 |
 | `policies/SPIKE.md` | 2026-11-07 的选型探路记录：为什么是这个权重、kp=500 必摔、零命令站不住（含实测表） |
 
 ## 7. 已知边界 / TBD（诚实清单）
@@ -214,4 +323,11 @@ Python 侧不另写一遍力矩。
    `ctrl_dt=0.02`（10 步）冲突。**这里按训练端 10 步 / 50 Hz**：25 Hz 会同时改 `phase_dt`
    和动作保持时间，等于换了一个策略，不是「照训练端 scale」。
 9. **高度定义**：本文件的 `height` 是「最高网格顶点」，换模型/换姿态口径会变，别跨模型比。
+10. **MIMIC 只在 4 段上验过**（注册表 `CLIPS`：`bonus/B_HandsUp`、`bonus/V_Rocamena`、
+    `bonus/B_HandsChop`、`dance/J_Dance0_StepTouch`），数据集另外 56 段没下载、没跑；`karate`
+    类一段没碰（任务书要求慎选）。P2a 原计划的「与数据集自带 `*_policy.mp4` 抽 5 帧比关节角
+    RMSE」**没有做**（TBD，不是已验）。默认片段的「七项全绿」只对**这一套 MJCF + 这一套增益**
+    成立，换模型 / 换增益要重跑。
+11. **MIMIC 有 1 次关节越限**（0.0144 rad @ waist_roll，见 §4c）：不达标项，原因与候选修法都写在那里，
+    没有为了过关去改判据或改世界物理。
    （POLICY 行走时 pelvis z 稳定在 0.72–0.76；T-pose 直腿站在 0.792，两者不是一回事。）

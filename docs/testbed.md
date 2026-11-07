@@ -299,6 +299,32 @@ L2 遇障要的正是这个持续信号。判据改为：**首次接触后 ≤10
 |---|---|---|---|
 | A 默认（无 `?auto`） | 0.0000 m，`cmd_max=0`，`denied_events=1` | 全程 HOLD | 拒绝生效 ✅ |
 | B `?auto=1` | **1.3775 m**（3 次 1.33–1.39） | HOLD → POLICY → HOLD，`y_min` 0.719 | L4 计划真能驱动身体 ✅ |
+### 动作库：mimic（P2a · `sim_server/policies/g1_mimic.py`）
+
+第三个模式 `MIMIC`（与 `POLICY` 互斥）：HOLD 站定 0.5 s → 0.6 s ramp 进片头 → 50 Hz 播放 → 播完用 `RAMP_S` 回 HOLD。
+权重是**第三方**的，不是我们训的：HF `exptech/g1-moves`（Experiential Technologies / mjlab 训练，CC-BY-4.0，需署名），
+每段带 `policy_154`：154 维 obs **外加一路 `time_step`**（两路输入，漏了直接报错），29 维动作。
+下载走 HF tree API 的 `size` + `lfs.oid` 双验后才落盘——先例是静默截断成 864 KiB 导致 `InvalidProtobuf`。
+
+**候选表（2026-11-07 · 本机 · n=1 · `selfcheck --mimic-candidates`）**
+
+| clip | frames | 时长 | 越限 | z_min | 跌倒 | 回 HOLD | p95 | 结论 |
+|---|---|---|---|---|---|---|---|---|
+| `bonus/B_HandsUp` | 441 | 8.82 s | 0 | 0.7766 | 否 | 0.208 s | 0.28 ms | **默认（全绿）** |
+| `bonus/B_HandsChop` | 1765 | 35.30 s | 0 | 0.7739 | 否 | 0.208 s | 0.20 ms | 对照（太长） |
+| `dance/J_Dance0_StepTouch` | 1949 | 38.98 s | **1** | 0.6182 | 否 | 0.208 s | 0.20 ms | **负结果，保留** |
+| `bonus/V_Rocamena` | 474 | 9.47 s | 3 | 0.0606 | **是** | — | 0.31 ms | 负结果，保留 |
+
+**`dance/J_Dance0_StepTouch` 为什么留着**：它越限的那一下（`waist_roll_joint` +0.0144 rad ≈ 0.83°，持续 ~0.13 s）
+**不是控制器的错**——参考动作自己的 `waist_roll` 最大值就是 +0.520 = 该关节硬限位，任何控制器跟到硬限位都会吃到
+MuJoCo 软限位的数值地板（`jnt_solref` 收到 0.002 后仍有 0.0011 rad，是 1e-3 判据的 1.1 倍）。
+结论写清楚：**换片段 ≠ 修好越限**。判据 1e-3 没动，`jnt_solref` 也没动（那是全局物理，会同时改 `--walk`/HOLD）。
+
+**两个「漏了就摔」的坑**（照 mjlab 源码/配置查出来的，不是试出来的）：
+
+1. `motion_anchor_ori_b` 展开顺序必须是 mjlab 的 `mat[..., :2].reshape(-1)`（行优先）；数据集自带 `run_policy.py` 用列优先，
+   照它写会甩腰、4 s 内摔。锚点体必须是 `torso_link`（用 `pelvis` 实测 z_min 0.055）。
+2. 播放节奏是 mjlab 的 `time_steps += 1`（每控制帧 +1 = 50 帧/秒，整段 38.98 s），不是数据集名义 60 FPS；按 60 播快 1.2 倍，同样摔。
 ## 设计（三层，各管一件事）
 
 | 层 | 位置 | 频率 | 职责 |
