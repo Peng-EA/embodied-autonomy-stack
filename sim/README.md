@@ -41,6 +41,9 @@ sim/.venv/Scripts/python -m sim.main --trace              # 每 0.25s 打一行�
 sim/.venv/Scripts/python -m sim.main --llm-disconnect 3   # 3 秒切断 LLM，看降级
 sim/.venv/Scripts/python -m sim.main --baseline b2        # 关掉 L1 抢占（对照）
 sim/.venv/Scripts/python -m sim.main --clearance-mode analytic   # 对照：解析式感知
+sim/.venv/Scripts/python -m sim.main --body g1 --duration 30     # 换人形 G1（G1World），L1–L4 不改
+sim/.venv/Scripts/python -m sim.main --scene dyn                 # 胶囊 + mocap 干扰体（DynWorld）
+sim/.venv/Scripts/python -m sim.main --body g1 --scene dyn       # exit 2：不兼容，不静默降级
 sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈值
 ```
 
@@ -73,7 +76,7 @@ sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈�
 | # | 接口 | 底盘（`world.py`） | G1（`g1_world.py`） | 现状 |
 |---|---|---|---|---|
 | 1 | `drive_toward` 返回值 | 推力 N | 命令速度 m/s | L1–L4 都不读它，不构成回归；但**名字骗人** |
-| 2 | `push`（L2 否决时的反推力） | 真的施力 | **忽略**，只记 `push_ignored` 计数 | 人形没有"推底盘"这个动作；正路是让 L2 否决走速度层 |
+| 2 | `push`（L2 否决时的反推力） | 真的施力 | **忽略**，只记 `push_ignored` 计数 | 人形没有"推底盘"这个动作；正路是让 L2 否决走速度层（**S2 已在 `main.py` 接线**，见下节） |
 | 3 | `charger_distance` | 场景里有充电桩 | 房间没有桩，只有地面距离 | L1 的 `charging` 在本场景**无物理对应** |
 | 4 | `clearance_analytic` | 只对那道墙成立 | 改成房间 AABB 精确最小距离 | 同义、对象不同；兼作 12 射线对照（实测 raycast 只会低估） |
 | 5 | 朝向 | 车体没有朝向自由度 | 有 | 加了有死区的 yaw 助力（`@own` + TBD）；**这处是人形新增行为**，可删 |
@@ -89,6 +92,37 @@ sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈�
 （射线实测 1.189 / 解析 1.110）。选点是 1 cm 网格扫房间、门槛 ≥0.60 m + 两条默认走廊各 2 m 无家具后取最开阔处；
 `node scripts/check-scene-parity.mjs` 现在把「净空 ≥0.60 m」写成断言（反向自测过：改回旧点会红并打印最近家具距离），
 以后谁把出生点挪到家具边上，CI 先红。
+
+### S2：`--body g1` 实测（2026-11-08 · n=1，30 s；同一初始状态连跑两次逐位相同）
+
+| 读数 | 值 | 怎么来的 |
+|---|---|---|
+| 时间基 | `dt_measured=0.010000s` × 3000 步，最大相对误差 **0.0000%** | 每步实测 `data.time` 前后差；>1% 直接 exit 2（G1 与胶囊都是 2 ms 步长，混配才会破） |
+| L1 | 广播 267（battery_low 267 / joint_stress 0） | 全程无 >85 N 的对外接触，所以压力没触发 |
+| L2 | 否决 1 次、真碰撞 0、`push_ignored=0` | 见下面"L2 逃生接线" |
+| L3 | 目标候选 3 次 | `charging` 判据在此场景无物理对应（无桩） |
+| L4 | LLM 调用 6 次（5 次拿到 plan）、挂起 3 次（L1 2 / L2 1）、降级 no、决策 2/2 | 两个 `seek_charger` 航点都到了 |
+| 平均速度 | 0.212 m/s | 全程；其中 14.71 s 站在"桩位"上不动（见下） |
+| 摔倒 | `z_min=0.7148 m` > `FELL_Z=0.50` → 未摔 | `z_min`=pelvis 高度最小值，与 `g1_world --check` 同口径 |
+| contacts | `contact_force_max=0.00 N`，`ncon` 峰值 8 对 | 对外的接触力（地面与自碰撞已排除） |
+
+**L2 逃生接线（S2 新增，按能力分叉，只对"没有 push 通道"的身体生效）**：`world.py` 的否决靠"推底盘"躲，
+人形没有这个通道（上表第 2 条）。照抄 `drive_toward(pos, 0.4, push=...)` 在人形上等于**零速度命令** →
+反射一触发就永久冻结。S2 首跑实测到了这个坑：5.25 s 触发后卡在原地到 30 s，并慢慢向前蹭进矮桌
+（5.25→9.50 s 位移 0.27 m，逐帧机制未定位），接触力峰值 1243.8 N，`z_min=0.3696` → 摔倒，`decisions=0` → exit 1。
+所以 `main.py` 里对没有 `push_ignored` 的身体，把同一个否决接成「沿 L2 给的逃生方向后退（速度档仍是 0.4）」。
+**L2 的判定与阈值一个字没动**，胶囊路径的行为一个字没变（`--baseline full --duration 6` 复跑仍是
+0.656 m/s / L1 66 / L2 1 / L4 3 / 电量 17.4%）。
+
+**G1 上三条语义缺口（记 TBD，不补信号）**：① 没有充电桩 —— 走到 `C.CHARGER_POS` 附近就被判成"在充电"，
+电量 8.4% → 100%（14.71 s），这条回升**没有物理依据**；② 由它生的 `hold_charge` 动机同理；
+③ 人形对侧向/后退命令跟得差（实测 0.15–0.3 m/s；正向 0.55 m/s），而胶囊房间那套航点常要求先转 ~167°，
+所以全程均速只有 0.212 m/s —— **不能拿它和胶囊的 0.656 m/s 比"性能"**，两者不是同一件事。
+
+**`--scene dyn` 与 G1 不兼容**（`DynWorld` 只有胶囊版：读 `scene_dyn.xml` 的 mocap 干扰体；
+G1 的房间来自 `g1.xml` + `scene_room.json`，没有会动的东西）。`--body g1 --scene dyn` **exit 2 并说明原因**，
+不静默降级。胶囊跑 `--scene dyn` 时抢占正确率打 `TBD`：`world.py` 的 `clone()` 只搬 qpos/qvel/time，
+不搬 `mocap_pos`，反事实推演里干扰体停在原点 —— 那个比例不采信。
 
 **一个必须知道的数值性质**：30 s 步行对初始坐标**浮点敏感**——只把出生点挪 1e-9 m，`walk_30s` 就从 0.5711 变成 0.5752 m/s。
 同一初始点连跑两次仍逐位相同（已验证），所以它是确定性的、但不是"抗扰动"的。这意味着：**基线里的 30 s 步行数字必须报 n≥5 的分布**，

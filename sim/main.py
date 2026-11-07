@@ -4,8 +4,27 @@
     python -m sim.main --baseline b2   # 关掉 L1 抢占（对照）
     python -m sim.main --llm-disconnect 2.5   # 2.5s 时 LLM 断线，看降级
 
+换身体 / 换场景（S2）：
+
+    python -m sim.main --body g1 --baseline full --duration 30   # 人形 G1，同一套 L1–L4
+    python -m sim.main --scene dyn                              # 胶囊 + mocap 干扰体（DynWorld）
+
 设计上刻意让"第一次规划撞墙"：这样 L2 的否决与 L4 的重规划是**必然发生**的，
 不是靠运气触发——否则你就不知道它到底有没有在工作。
+
+两条硬约束（本入口自己负责，不写进 L1–L4）：
+
+1. **时间基**：每个控制周期必须推进 1/CONTROL_HZ 的仿真时间。每步实测
+   （data.time 的前后差），相对误差 > 1% 立刻 exit 2 —— 时间常数（%/s、tau=1.6s、
+   0.8s 冷却）全都绑在这个时间基上，跑偏了等于换了一套判据。
+2. **身体 x 场景的兼容性**：动态场景只有胶囊版（DynWorld 读 scene_dyn.xml 的 mocap 干扰体）；
+   G1 的房间（g1.xml + scene_room.json）里没有任何会动的东西。--body g1 --scene dyn
+   直接 exit 2 并说明原因，**不静默降级**到静态场景。
+
+G1 上语义不成立的地方（如实打 TBD，不伪造信号）：L1 的 charging（房间里没有充电桩，
+只有 C.CHARGER_POS 那个地面点）、L3 由 charging 生的 hold_charge 动机、L2 的 push
+（人形没有"推底盘"通道，G1World 忽略并计数 push_ignored；本入口按能力把它接成
+"沿 L2 给的逃生方向后退"的速度命令，否则否决一人形就永久冻结——见下方 has_push_channel）。
 """
 
 from __future__ import annotations
@@ -32,6 +51,34 @@ from .l4_planning.mock_llm import MockLLMService
 
 REPO = Path(__file__).resolve().parent.parent
 
+# ---------------------------------------------------------------- 身体 / 场景
+BODY_CHOICES = ("capsule", "g1")     # capsule=历史基线那台平面底盘；g1=Unitree G1 人形
+SCENE_CHOICES = ("stage1", "dyn")    # stage1=静态房间；dyn=带 mocap 干扰体的动态场景
+
+# 时间基容差 1%。控制周期 10 ms、物理步 2 ms，2 ms -> 5 步是整除关系：
+# 任何"每周期推进的仿真时间"偏差都会是整倍数/整分数，不存在只偏 2% 的正常情况。
+DT_TOL = 0.01
+
+
+def _incompatible(body: str, scene: str) -> str | None:
+    """身体 x 场景的兼容性闸门：返回错误说明（None = 兼容）。
+
+    为什么必须显式拒绝而不是"回退到另一个场景"：动态场景的全部意义就是"世界在你不看的
+    时候变了"，悄悄换成静态场景等于把这条链测丢，还拿它当 dyn 的结果报出去。
+    """
+    if body != "g1" or scene == "stage1":
+        return None
+    return "\n".join([
+        "[exit 2] --body g1 与 --scene dyn 不兼容：动态场景只有胶囊版",
+        "  - sim/env/dyn_world.py 的 DynWorld 继承胶囊的 world.World，读 sim/env/scene_dyn.xml，",
+        "    用 mocap 体 'intruder' 在 x 方向做 0.35 Hz 简谐运动（INTRUDER_AMP/FREQ）。",
+        "  - G1World 的房间来自 testbed/public/mujoco/g1/g1.xml + sim/env/scene_room.json，",
+        "    里面没有 intruder 体、没有 mocap —— 人形这边没有任何东西会动。",
+        "  - 硬拼起来，L2 看到的'世界'是静止的，跑出来的数会被误读成'动态场景下 L2 没触发'。",
+        "  - 所以这里直接拒绝，不静默降级到 --scene stage1（那就成了拿静态场景冒充动态场景）。",
+        "  - 要跑动态场景请用胶囊：python -m sim.main --scene dyn（--body 默认 capsule）。",
+    ])
+
 
 def _init_console() -> None:
     """Windows 默认控制台是 GBK(936)，本工程的输出里有中文和 box-drawing 字符，
@@ -42,10 +89,13 @@ def _init_console() -> None:
             ctypes.windll.kernel32.SetConsoleOutputCP(65001)
         except Exception:
             pass
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+    # stderr 也要切：拒绝跑（exit 2）的说明都走 stderr，只切 stdout 会在管道/重定向下
+    # 按本地码页(936)编码，收端按 UTF-8 读就是一片乱码——报错看不懂等于没报错。
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 
 def _git_commit() -> str:
@@ -61,6 +111,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--baseline", default="full",
                     choices=["full", "b0", "b0p", "b1", "b2"],
                     help="full=本系统全开；b0/b0p/b1/b2=四条消融基线")
+    ap.add_argument("--body", default="capsule", choices=list(BODY_CHOICES),
+                    help="capsule=平面底盘（历史基线可比，默认）；"
+                         "g1=Unitree G1 人形（G1World，L1–L4 一个字不改）")
+    ap.add_argument("--scene", default="stage1", choices=list(SCENE_CHOICES),
+                    help="stage1=静态房间（默认）；dyn=带 mocap 干扰体的动态场景"
+                         "（只有胶囊版；--body g1 时 exit 2，不静默降级）")
     ap.add_argument("--duration", type=float, default=C.DURATION_S)
     ap.add_argument("--llm-disconnect", type=float, default=None,
                     help="在第 N 秒切断 LLM（检验降级路径）")
@@ -74,8 +130,15 @@ def main(argv: list[str] | None = None) -> int:
                     help="打印由 evals/baselines/*.yaml 推导出的开关后退出（核对用）")
     ap.add_argument("--no-counterfactual", action="store_true",
                     help="关掉反事实推演（快，但没有真实抢占正确率）")
-    args = ap.parse_args(argv)
+    # 在 parse_args 之前切码页/编码：-h 的说明是 argparse 自己打出来的，
+    # 放后面的话中文帮助在管道/重定向下照样是乱码。
     _init_console()
+    args = ap.parse_args(argv)
+
+    bad = _incompatible(args.body, args.scene)
+    if bad:
+        print(bad, file=sys.stderr)
+        return 2
 
     if args.clearance_mode:
         C.CLEARANCE_MODE = args.clearance_mode
@@ -93,8 +156,11 @@ def main(argv: list[str] | None = None) -> int:
     meta = {
         # 必须有这一键：EventLog 用它给日志命名（缺了会全部退化成 "B1" 并互相覆盖）
         "baseline": args.baseline,
-        "scenario": "stage1-self-needs",
+        "scenario": "stage1-self-needs" if args.scene == "stage1" else "dyn-intruder",
         "platform": "mujoco",
+        # 身体与场景显式落盘：不然同一份 "FULL" 日志分不清是胶囊还是人形跑出来的
+        "body": args.body,
+        "scene": args.scene,
         "code_commit": _git_commit(),
         "started_at_ms": int(time.time() * 1000),
         "operator": "Peng-EA",
@@ -114,7 +180,29 @@ def main(argv: list[str] | None = None) -> int:
     clock = lambda: sim_ms["v"]
     bus = SignalBus(log, t0, clock)
 
-    world = World()
+    # 身体 = 只换 world.py 的那张脸；L1–L4 看到的接口一个字不变。
+    if args.body == "g1":
+        # 延迟导入：G1World 要编译 g1.xml 并载入 ONNX 策略（实测 ~0.2 s），胶囊路径不该为它付钱
+        from .env.g1_world import FELL_Z, G1World
+        world = G1World()
+        fell_z = float(FELL_Z)
+    elif args.scene == "dyn":
+        from .env.dyn_world import DynWorld
+        world = DynWorld()
+        fell_z = 0.0
+    else:
+        world = World()
+        fell_z = 0.0
+    is_g1 = args.body == "g1"
+    is_dyn = args.scene == "dyn"
+
+    # L2 的"推底盘"逃生通道只存在于胶囊身体（world.py 用 xfrc_applied 推一个平面底盘）。
+    # 人形没有这个通道（g1_world.py 第 2 条：push 被忽略并计数），于是
+    # drive_toward(pos, 0.4, push=...) 在人形上等于"零速度命令"——反射一触发就永久冻结。
+    # 所以这里按**能力**（有没有 push_ignored）分叉：没有推力通道的身体，把同一个否决接到
+    # 速度层——沿 L2 给的逃生方向后退，速度档仍用原来那个 0.4。L2 的判定与阈值一个字没动。
+    has_push_channel = not hasattr(world, "push_ignored")
+
     l1 = Homeostasis(bus, log)
     l2 = ReflexControl(bus, log)
     l3 = AffectMotivation(bus, log, cfg)
@@ -124,10 +212,44 @@ def main(argv: list[str] | None = None) -> int:
     events: list[str] = []
     orig_emit = bus.emit
 
+    # 事件计数（全量，不跟面板去抖）：G1 摘要要按层报"触发了几次"，不是"面板显示了几条"。
+    # 只读地数信号，不改任何层的逻辑，也不替任何层补它没有的信号。
+    counts = {
+        "l1_broadcast": 0, "l1_cause": {},
+        "l2_override": 0, "l2_collision": 0,
+        "l3_goal": 0,
+        "l4_suspend": 0, "preempt_l1": 0, "preempt_l2": 0,
+        "llm_result": 0, "llm_ok": 0,
+    }
+
+    def _count(layer: str, name: str, extra: dict) -> None:
+        if layer == "L1" and name == "homeostatic_broadcast":
+            counts["l1_broadcast"] += 1
+            cause = str(extra.get("need") or "?")
+            counts["l1_cause"][cause] = counts["l1_cause"].get(cause, 0) + 1
+        elif layer == "L2" and name == "reflex_override":
+            counts["l2_override"] += 1
+        elif layer == "L2" and name == "outcome_event":
+            counts["l2_collision"] += 1
+        elif layer == "L3" and name == "goal_candidate":
+            counts["l3_goal"] += 1
+        elif layer == "L4" and name == "preempt":
+            counts["l4_suspend"] += 1
+            by = str(extra.get("preempted_by") or "")
+            if by.startswith("L1"):
+                counts["preempt_l1"] += 1
+            elif by.startswith("L2"):
+                counts["preempt_l2"] += 1
+        elif layer == "LLM" and name == "semantic_plan_result":
+            counts["llm_result"] += 1
+            if extra.get("value") is not None:      # 只有真拿到 plan 才有 value（降级那条没有）
+                counts["llm_ok"] += 1
+
     _last_seen: dict[str, float] = {}
 
     def emit_with_ticker(signal, layer, decision_id, event=None, **extra):
         name = event or getattr(signal, "signal", "?")
+        _count(layer, name, extra)
         now_s = clock() / 1000
         # 面板去抖：L1 是 20Hz 采样，全打出来会把事件流刷成一条河流。
         # 同一类事件 0.6s 内只显示一次（日志里仍然是完整的）。
@@ -149,6 +271,20 @@ def main(argv: list[str] | None = None) -> int:
     charging = False
     done_before: float | None = None
     last_render = -1.0
+
+    # ---- 时间基：每个控制周期实测推进了多少仿真时间（只读 data.time，不改物理）
+    dt_expected = 1.0 / C.CONTROL_HZ
+    dt_first: float | None = None
+    dt_worst = 0.0
+    dt_worst_step = -1
+
+    # ---- G1 专属读数（胶囊路径不采，保证 A 的输出与改前一致）
+    z_min = math.inf
+    contact_max = 0.0
+    ncon_max = 0
+    stress_max = 0.0
+    charging_ticks = 0
+
     if cfg.render:
         print("\033[2J\033[H", end="")   # 清屏
 
@@ -156,6 +292,9 @@ def main(argv: list[str] | None = None) -> int:
         t = step / C.CONTROL_HZ
         sim_ms["v"] = int(t * 1000)
         did = f"d{step:05d}"
+        if is_dyn:
+            # 干扰体按绝对仿真时间摆位（与 test_vla_l4 同口径）：它没有动力学，位置就是时间的函数
+            world.advance_intruder(t)
         pos = world.pos
 
         # ---- 感知 → 分层（顺序即优先级：L1 → L2 → L3 → L4）
@@ -195,7 +334,14 @@ def main(argv: list[str] | None = None) -> int:
         if charging:                         # 已经在桩上：停住，别把桩顶出接触力
             world.brake()
         elif l2.active:                      # 反射否决：先躲
-            world.drive_toward(pos, 0.4, push=l2.push)
+            if has_push_channel:
+                world.drive_toward(pos, 0.4, push=l2.push)
+            elif math.hypot(l2.push[0], l2.push[1]) > 1e-9:
+                # 人形：没有推力通道 → 沿逃生方向（push 的反方向由 L2 给）给速度命令。
+                # 目标点取 1 m 外：只为了让 v_des 打到 0.4 档的饱和值，不是新判据。
+                world.drive_toward((pos[0] + l2.push[0], pos[1] + l2.push[1]), 0.4)
+            else:
+                world.brake()
         elif target is not None:
             mod = l3.speed_modulation() if cfg.layers_enabled["l3"] else 1.0
             world.drive_toward(target, scale * mod * (1.0 if not charging else 0.6))
@@ -203,9 +349,38 @@ def main(argv: list[str] | None = None) -> int:
             world.brake()
 
         # ---- 物理推进
+        t_sim_before = float(world.data.time)
         world.step(C.STEPS_PER_CONTROL)
+        dt_measured = float(world.data.time) - t_sim_before
+        if dt_first is None:
+            dt_first = dt_measured
+        rel_err = abs(dt_measured - dt_expected) / dt_expected
+        if rel_err > dt_worst:
+            dt_worst, dt_worst_step = rel_err, step
+        if rel_err > DT_TOL:
+            # 时间基一错，L1 的 %/s、L3 的 tau、L2 的冷却窗口就都不是物理量了：立刻停，
+            # 不把后面的数当结论（G1 的 2 ms 与别的场景混用正是这么错的）。
+            msg = (f"[exit 2] 时间基校验失败 @ step={step} t={t:.2f}s："
+                   f"dt_measured={dt_measured:.6f}s dt_expected={dt_expected:.6f}s "
+                   f"相对误差={rel_err * 100:.3f}% > {DT_TOL * 100:.1f}%"
+                   f"（body={args.body} scene={args.scene} world={type(world).__name__}）")
+            print("\n" + msg, file=sys.stderr)
+            log.write(clock(), "SIM", "time_base_fail", did,
+                      value=round(rel_err, 6),
+                      detail=f"dt_measured={dt_measured:.6f} dt_expected={dt_expected:.6f}")
+            log.close()
+            return 2
+
         speed_sum += world.speed
         speed_n += 1
+
+        if is_g1:
+            z_min = min(z_min, float(world.data.qpos[2]))   # pelvis 高度，与 g1_world 自检同一个量
+            contact_max = max(contact_max, force)
+            ncon_max = max(ncon_max, int(world.data.ncon))
+            stress_max = max(stress_max, l1.stress)
+            if charging:
+                charging_ticks += 1
 
         # ---- 完成判定
         if (l4.goal_done() and done_before is None
@@ -252,13 +427,52 @@ def main(argv: list[str] | None = None) -> int:
     print("=" * 78)
     print(f"基线            {cfg.baseline.upper()}  (抢占={'ON' if cfg.preemption_enabled else 'OFF'})")
     print(f"仿真时长        {cfg.duration_s:.1f}s （真实耗时 {elapsed:.1f}s）")
-    print(f"最终电量        {l1.battery:.1f}%   充电完成={'是' if charging else '否'}")
+    print(f"时间基校验      dt_measured={(dt_first or 0.0):.6f}s  dt_expected={dt_expected:.6f}s  "
+          f"最大相对误差={dt_worst * 100:.4f}%（上限 {DT_TOL * 100:.1f}%，"
+          f"最差步={dt_worst_step if dt_worst > 1e-9 else '-'}）  "
+          f"{'PASS' if dt_worst <= DT_TOL else 'FAIL'}")
+    charge_note = ("   <- TBD：本房间没有充电桩，charging 只是「走到 C.CHARGER_POS 这个地面点」"
+                   if is_g1 else "")
+    print(f"最终电量        {l1.battery:.1f}%   充电完成={'是' if charging else '否'}{charge_note}")
     print(f"L1 广播次数     {l1.broadcasts}")
     print(f"L2 否决次数     {l2.overrides}   真碰撞 {l2.collisions}")
     print(f"L4 规划请求     {l4.plans}   被中断 {l4.aborts}   降级={'YES' if l4.degraded else 'no'}")
     print(f"平均速度        {speed_sum / max(1, speed_n):.3f} m/s")
     print(f"需求驱动占比    {needs_ratio:.2f}  (={l4.need_decisions}/{l4.decisions} 个决策)")
-    if precision is None:
+    if is_g1:
+        causes = counts["l1_cause"]
+        fell = z_min <= fell_z
+        print("-" * 78)
+        print("G1 身体 · 事件计数（L1–L4 一行没改，换的只是 world.py 那张脸背后的物理）")
+        print(f"L1 压力触发     joint_stress 广播 {causes.get('joint_stress', 0)} 次"
+              f"（L1 总广播 {counts['l1_broadcast']}：battery_low {causes.get('battery_low', 0)}"
+              f" / thermal_high {causes.get('thermal_high', 0)}）")
+        print(f"L1 读数峰值     stress={stress_max:.1f} N（低通后）；contact_force={contact_max:.1f} N"
+              f"（STRESS_WARN={C.STRESS_WARN:.0f} N）")
+        print(f"L2 反射次数     overrides={counts['l2_override']}  collisions={l2.collisions}"
+              f"  push_ignored={getattr(world, 'push_ignored', 0)}")
+        print(f"L2 逃生接线     人形没有 push 通道（g1_world 第 2 条）→ 否决在 main 里接成"
+              f"「沿逃生方向后退（速度档 0.4）」；L2 判定/阈值未改，push 路径不再被调用")
+        print(f"L3 目标候选     goals_emitted={counts['l3_goal']}"
+              f"（charging 判据 TBD：房间里没有充电桩）")
+        print(f"L3/L4 抢占否决  L4 挂起 {counts['l4_suspend']} 次"
+              f"（L1 广播 {counts['preempt_l1']} / L2 否决 {counts['preempt_l2']}）"
+              f"  aborts={l4.aborts}")
+        print(f"L4 LLM 调用     plans={l4.plans}  返回={counts['llm_result']}"
+              f"（拿到 plan {counts['llm_ok']}）  超时/降级={l4.timeouts}"
+              f"  degraded={'YES' if l4.degraded else 'no'}")
+        print(f"摔倒（z_min）   z_min={z_min:.4f} m  {'<=' if fell else '>'} FELL_Z={fell_z:.2f} m"
+              f"  -> {'摔了' if fell else '未摔'}")
+        print(f"contacts 最大   contact_force_max={contact_max:.2f} N   ncon_max={ncon_max} 对")
+        if charging_ticks:
+            print(f"charging 周期   {charging_ticks} 个控制周期（{charging_ticks / C.CONTROL_HZ:.2f}s"
+                  f" / {cfg.duration_s:.2f}s）被判成「在充电」→ L1 电量回升、机器人站住不动；"
+                  f"TBD：没有物理依据（只是靠近 C.CHARGER_POS）")
+        print("语义不成立      L1.charging / L3 hold_charge / L2.push —— 三处记 TBD，未伪造信号")
+    if is_dyn and precision is not None:
+        print(f"抢占正确率      TBD（dyn 场景：world.py 的 clone() 只搬 qpos/qvel/time，不搬 mocap_pos，"
+              f"反事实推演里干扰体停在原点；已发生 {cf_total} 次否决，这个比例不采信）")
+    elif precision is None:
         print("抢占正确率      未测（反事实推演被关闭或没有发生抢占）")
     else:
         print(f"抢占正确率      {precision:.2f}  = {cf_should}/{cf_total} 次否决"
