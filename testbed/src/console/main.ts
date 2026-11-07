@@ -6,7 +6,7 @@ import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import './style.css';
 import { Vitals } from './vitals.ts';
-import { Planner, STALE_AGE_MS } from './plan.ts';
+import { Planner, STALE_AGE_MS, type PlanOutcome } from './plan.ts';
 import { Affect } from './affect.ts';
 import { RoomPhysics } from './physics.ts';
 import type { Body } from './body.ts';
@@ -304,7 +304,18 @@ window.addEventListener('pointermove', (e) => {
   look.pitch = -ny * 0.28;
 });
 
-const reflex = { until: 0, vx: 0, vz: 0, cooldown: 0, count: 0 };
+/**
+ * 起步窗：走路刚起步的这段时间里不判"撞上了"。
+ * 理由（实测，不是拍的）：策略从静止加速到 cmd 需要 ~0.5 s，这段 is_blocked 必然为真
+ * ——cmd=1.1 时 blocked 一直真到 t≈0.42 s（19 帧），cmd=0.5 到 t≈0.31 s（6 帧）。
+ * 页面原来 blockedFrames>6 就判撞，于是"刚开始走"就被 L2 反射打断、target 被清掉，
+ * 走路根本走不满 1 m。服务端 sim_server/selfcheck.py 对碰撞测试也是把 startup blocked
+ * 单列的（同一套理由）。**0.8 s 之后照旧**：阈值与判据一个字没改。
+ */
+const REFLEX_GRACE_S = 0.8;
+/** 走路的目标线速度（m/s，还要乘 L3 的 speedScale 0.55–1.0）。见运动段注释：这是策略能兑现的档位 */
+const WALK_SPEED = 0.6;
+const reflex = { until: 0, vx: 0, vz: 0, cooldown: 0, count: 0, armedAt: 0 };
 
 // ---------------------------------------------------------------- 身体后端
 // 胶囊（Rapier）与 G1（MuJoCo）走同一份 BodyCommand / BodyState：
@@ -324,13 +335,20 @@ let lastActAt = -99;
 
 // P0d：上行指令的唯一出处。用户没真输入之前，它只发 (0,0,0)；
 // 首帧 state 到手后再把 yaw 零位对齐到真实朝向（见 cmd-gate.ts）。
-const gate = new CmdGate();
+//
+// P0e：授权分两条通道。'user' 恒放行；'autonomy'（L4 自主计划）默认**关**，
+// 只有 URL ?auto=1 或有人显式 window.__allowAutonomy = true 才生效（两个条件实时读，
+// 不做"值看着像就放行"的宽松匹配）。
+const gate = new CmdGate({
+  autonomyEnabled: () =>
+    new URLSearchParams(location.search).get('auto') === '1' || (window as any).__allowAutonomy === true,
+});
 (window as any).__gate = gate;
 
 // 第一次真输入（键盘/点击/摇杆/聊天）才放行非零指令：显式标志，不靠数值巧合。
 // 页面目前没有键盘/摇杆控制，先让"按下任意键 / 点一下"成为授权动作。
-addEventListener('keydown', () => gate.authorize(), { passive: true });
-addEventListener('pointerdown', () => gate.authorize(), { passive: true });
+addEventListener('keydown', () => gate.authorize('user'), { passive: true });
+addEventListener('pointerdown', () => gate.authorize('user'), { passive: true });
 
 // ---------------------------------------------------------------- 5 个动作
 type Act = 'none' | 'sit' | 'pick' | 'drink' | 'startle';
@@ -397,10 +415,11 @@ const spots: Record<string, [number, number]> = {
 function go(name: string) {
   const p = spots[name];
   if (!p) return;
-  // 显式运动意图（聊天指令 / ?auto 演示）：这是"人让它走"，不是加载即发
-  gate.authorize();
+  // 显式运动意图（聊天指令 / ?auto 演示）：这是"人让它走"，不是加载即发 → 'user'
+  gate.authorize('user');
   target = new THREE.Vector3(p[0], 0, p[1]);
   mode = 'walk';
+  reflex.armedAt = elapsed + REFLEX_GRACE_S; // 起步窗：加速段不算碰撞
   say('收到，去' + name + '。');
   setAction('行走 · ' + name);
 }
@@ -490,7 +509,7 @@ function handle(text: string) {
 
 ($('say') as HTMLFormElement).onsubmit = (e) => {
   e.preventDefault();
-  gate.authorize(); // 聊天提交＝真输入（键盘/点击之外的后门，同样只放行显式意图）
+  gate.authorize('user'); // 聊天提交＝真输入（键盘/点击之外的后门，同样只放行显式意图）
   const input = $('msg') as HTMLInputElement;
   const v = input.value;
   if (!v.trim()) return;
@@ -591,6 +610,42 @@ function setBar(barId: string, numId: string, v: number, fmt: (v: number) => str
 // L4：需求压力过线才问服务；结果过期就作废重来，不拿旧计划开车。
 let planning = false;
 let lastPlanAt = -99;
+/** 已播报过的"被拒"状态 key（同一种状态只打一条 sys，不刷屏） */
+let l4DeniedKey: string | null = null;
+/** L4 被拒次数（诊断/探针用；A 组判据要求 ≥1） */
+let l4DeniedEvents = 0;
+
+/**
+ * L4 意图**唯一的采纳口**（P0e）。自主计划要驱动身体，先得 gate.authorize('autonomy')：
+ * 默认关 → 拒绝、计划不落到 target/mode（cmd 因此恒 0）、打一条 sys，同一状态只打一次。
+ * ?auto=1 打开（或 window.__allowAutonomy = true）之后才照原来的路采纳。
+ * 拒绝不是"降级成 user"——自主通道和人的通道不能互相冒充。
+ */
+function adoptL4Intent(out: PlanOutcome): void {
+  const goal = out.intent.target;
+  if (out.intent.kind !== 'goto' || !goal) return;
+  if (Math.hypot(char.position.x - goal.x, char.position.z - goal.z) < 0.4) return; // 已在该做的事旁边，别原地反复下令
+
+  if (!gate.authorize('autonomy')) {
+    const key = out.intent.kind + ':' + goal.x.toFixed(2) + ',' + goal.z.toFixed(2);
+    if (l4DeniedKey !== key) {
+      l4DeniedKey = key;
+      l4DeniedEvents++;
+      pushLog('sys', 'L4 想走但未授权（?auto=1 开启）· ' + (out.intent.why || out.intent.kind));
+      setAction('L4 未授权 · 拒动');
+    }
+    return;
+  }
+  l4DeniedKey = null;
+
+  target = new THREE.Vector3(goal.x, 0, goal.z);
+  mode = 'walk';
+  reflex.armedAt = elapsed + REFLEX_GRACE_S; // 起步窗：加速段不算碰撞
+  pushLog('sys', 'L4 采纳 · ' + out.provider + ' · age=' + out.ageMs + 'ms · ' + (out.intent.why || ''));
+  say(out.intent.say || '我过去看看。');
+  setAction('行走 · L4 意图');
+}
+
 setInterval(async () => {
   if (paused || planning) return;
   if (!usingModel) return;
@@ -611,15 +666,7 @@ setInterval(async () => {
     lastPlanAt = elapsed - 5.5;
     return;
   }
-  if (out.intent.kind === 'goto' && out.intent.target) {
-    const d = Math.hypot(char.position.x - out.intent.target.x, char.position.z - out.intent.target.z);
-    if (d < 0.4) return; // 已经在该做的事旁边，别原地反复下令
-    target = new THREE.Vector3(out.intent.target.x, 0, out.intent.target.z);
-    mode = 'walk';
-    pushLog('sys', 'L4 采纳 · ' + out.provider + ' · age=' + out.ageMs + 'ms · ' + (out.intent.why || ''));
-    say(out.intent.say || '我过去看看。');
-    setAction('行走 · L4 意图');
-  }
+  adoptL4Intent(out);
 }, 700);
 
 setInterval(sample, 120);
@@ -855,13 +902,27 @@ function animate() {
       setAction('待机');
     } else {
       dir.normalize();
-      const speed = 1.15 * affect.speedScale();
-      vx = dir.x * speed;
-      vz = dir.z * speed;
+      // P0e 前置：步速收到策略真能兑现的档位。实测 cmd=0.5 时策略走 0.55 m/s 且轨迹稳定；
+      // 给到 1.1 m/s（旧值 1.15×speedScale）时是**训练档位之外**，实测它会斜着走、越走越偏，
+      // 最后撞家具被 L2 反射打断。0.6 是"策略一侧量出来能兑现"的值，不是拍的。
+      const speed = WALK_SPEED * affect.speedScale();
+      // P0e 前置：按**单轨**给速度——只在机头方向给前进速度，横向交给 yaw 控制器。
+      // 服务端的 joystick 策略对侧向速度很不友好（实测一给侧向就侧滑 + 打转 + 撞家具），
+      // 而且世界系速度被当成机体系灌进去连方向都不对（转换见 g1-body-ws.ts 的 toBody）。
+      const cur = body ? body.state().yaw : 0;
+      const want = Math.atan2(-dir.z, dir.x); // 服务端口径：机头前向 = (cos yaw, −sin yaw)
+      const err = Math.atan2(Math.sin(want - cur), Math.cos(want - cur));
+      const fwd = speed * Math.max(0, Math.cos(err)); // 朝向差太大先原地转，别斜着蹭
+      vx = fwd * Math.cos(cur);
+      vz = -fwd * Math.sin(cur);
       // 显示朝向给渲染，指令朝向给 gate：两者不再互相冒充（P0d）
-      gate.turnTo(Math.atan2(dir.x, dir.z));
+      gate.turnTo(want);
       char.rotation.y = Math.atan2(dir.x, dir.z) + yawOffset;
     }
+  } else {
+    // 不走的时候不给转向指令：yaw 指令回 0（见 CmdGate.releaseTurn）。
+    // 否则上一次转向留下的角度差会一直挂着，服务端永远退不出 POLICY、回不到 HOLD。
+    gate.releaseTurn();
   }
 
   // 同一份指令，两个身体：谁在跑由 bodyKind 决定
@@ -869,12 +930,16 @@ function animate() {
     // P0d 首帧对齐：真实 state 一到手就把 yaw 指令零位钉在它的真实朝向上。
     // 对齐后静止时 yaw 指令精确为 0，不依赖 char.rotation.y 的构图角度。
     if (!gate.aligned) gate.align(body.state().yaw);
+    // 转向指令 = 目标朝向 − **当前**真实朝向（不是首帧的差）；不喂就会拿旧 yaw 算，
+    // 一路转到底。见 CmdGate.trackYaw / yawRate。
+    gate.trackYaw(body.state().yaw);
     const st = body.step(dt, gate.command(vx, vz));
     char.position.x = st.x;
     char.position.z = st.z;
 
     // "撞上了"= 想要的速度没兑现。这是物理给的真信号，不是包围盒猜的。
-    if (st.blocked && elapsed > reflex.cooldown) {
+    // 起步窗（见 REFLEX_GRACE_S）之外才认"撞上了"；撞上后 1.2 s 冷却
+    if (st.blocked && elapsed > reflex.armedAt && elapsed > reflex.cooldown) {
       blockedFrames++;
       if (blockedFrames > 6) {
         blockedFrames = 0;
@@ -977,7 +1042,14 @@ setInterval(() => {
 (window as any).__cmd = () => gate.lastCommand;
 (window as any).__state = () => ({
   body: bodyKind,
-  gate: { authorized: gate.authorized, aligned: gate.aligned, cmd: gate.lastCommand },
+  gate: {
+    authorized: gate.authorized,
+    source: gate.source,
+    autonomyEnabled: gate.autonomyEnabled,
+    denied: gate.denied,
+    aligned: gate.aligned,
+    cmd: gate.lastCommand,
+  },
   rot: Math.round(char.rotation.y * 100) / 100,
   mode,
   hasTarget: !!target,
@@ -985,6 +1057,50 @@ setInterval(() => {
   z: Math.round(char.position.z * 100) / 100,
   cam: camera.position.toArray().map((v: number) => Math.round(v * 100) / 100),
 });
+
+// ---------------------------------------------------------------- 调试钩子（只在 debug 下挂）
+// 挂载条件：URL 带 ?debug（或 vite dev，import.meta.env.DEV）。**生产构建 + 不带参数时不挂**，
+// 页面行为与 P0e 之前一模一样。
+// 唯一用途：无头探针 testbed/scripts/probe-autonomy.mjs 强制走一次 L4 采纳路径。它调的是
+// 页面同一个 adoptL4Intent()，不复制"探针专用"分支；pose() 只报服务端真值，没帧就 null，
+// 不用页面插值/显示坐标冒充。
+const DEBUG =
+  new URLSearchParams(location.search).has('debug') || (import.meta as any).env?.DEV === true;
+if (DEBUG) {
+  (window as any).__dbg = {
+    /** 强制一次 L4 goto 意图（默认点 1.6, 0.6 在空旷处，避开矮桌） */
+    forceL4: (t?: { x: number; z: number }) => {
+      adoptL4Intent({
+        intent: { kind: 'goto', target: t ?? { x: 1.6, z: 0.6 }, say: '', why: 'debug force' },
+        ageMs: 0,
+        provider: 'debug-force',
+        latencyMs: 0,
+        stale: false,
+      });
+      return true;
+    },
+    /** 自主通道现状 */
+    gate: () => ({
+      authorized: gate.authorized,
+      source: gate.source,
+      autonomyEnabled: gate.autonomyEnabled,
+      denied: gate.denied,
+      deniedEvents: l4DeniedEvents,
+      deniedKey: l4DeniedKey,
+    }),
+    /** 服务端真值位姿 + 服务端模式机（没帧 = null） */
+    pose: () => {
+      const b: any = g1ws ?? g1 ?? body;
+      if (!b) return null;
+      try {
+        const st = b.state();
+        return { x: st.x, y: st.y, z: st.z, mode: g1ws ? (g1ws.frame()?.mode ?? null) : null };
+      } catch {
+        return null;
+      }
+    },
+  };
+}
 
 resize();
 animate();

@@ -418,14 +418,34 @@ export class G1BodyWs implements Body {
     }
   }
 
+  /**
+   * 世界系速度 → 机体系指令（P0e 前置修复，不改 body.ts 契约）。
+   *
+   * body.ts 的 (vx, vz) 是**世界系**速度（胶囊后端直接把它当位移用），而 sim_server 的
+   * cmd 是**机体系**（前向 lin_vel_x / 侧向 lin_vel_y，喂给 joystick 策略）。以前这里把
+   * 世界系速度原样灌进去：机头不朝 +x 时它就侧移/拐弯，L4 的 goto 根本走不到目标。
+   * 机体系基向量（按当前帧真实 yaw θ，three 的 y 轴）：
+   *   前 forward(θ) = ( cosθ, −sinθ)，侧 lateral(θ) = (−sinθ, −cosθ)   [x, z]
+   *   θ=0 时实测 cmd.vx → 世界 +x、cmd.vz → 世界 −z（probe-autonomy 注里记了口径）。
+   * 反解就是 M⁻¹ = M（这组基是自逆的）：f = wx·cosθ − wz·sinθ，l = −wx·sinθ − wz·cosθ。
+   * yaw 仍是角度误差（P0d 的约定），本函数不碰它。
+   */
+  private static toBody(cmd: BodyCommand, yaw: number): { vx: number; vz: number } {
+    const c = Math.cos(yaw);
+    const s = Math.sin(yaw);
+    return { vx: cmd.vx * c - cmd.vz * s, vz: -cmd.vx * s - cmd.vz * c };
+  }
+
   private send(cmd: BodyCommand): void {
     const ws = this.ws;
     if (!ws || ws.readyState !== 1) return;
+    // 没有真实帧就不知道机头朝哪：此时不转（θ=0），但仍如实上报是"按 0 处理"——由调用方保证首帧到手后才发非零指令。
+    const body = G1BodyWs.toBody(cmd, this.lastFrame?.yaw ?? 0);
     try {
       ws.send(
         JSON.stringify({
           t: Date.now(),
-          cmd: { vx: cmd.vx, vz: cmd.vz, yaw: cmd.yaw },
+          cmd: { vx: body.vx, vz: body.vz, yaw: cmd.yaw },
           jointTargets: null,
         }),
       );

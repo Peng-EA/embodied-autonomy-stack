@@ -11,6 +11,12 @@
 
 ### Added
 
+- **自主授权通道 + 网络侧四个缺陷修复（P0e）**：`cmd-gate` 增加 `autonomy` 授权来源（`?auto=1` 才生效，默认拒绝并留 sys 事件），
+  使 L4 自主计划能驱动身体而不复活「加载即走」。同时修掉跨网络后暴露的 4 个缺陷：世界系/机体系速度错 90°、
+  yaw 语义当角速度（残留 2.49 rad 退不出 POLICY）、步速 1.1 m/s 超出策略训练档位（改 0.6）、起步 0.3–0.4 s 内
+  `is_blocked` 恒真导致 L2 掐死走路（0.8 s 起步窗）。
+  实测 n=3（Edge headless）：无 `?auto` → moved 0.0000 m / denied_events=1；`?auto=1` → moved 1.3775 m（1.33–1.39）、
+  HOLD→POLICY→HOLD、`y_min` 0.719。
 - **WS 档画出真 G1 + 发送环解耦（P0c）**：状态帧首帧带 `geom.mesh/meshMeta`（geom 名全是 `None`，而且 MuJoCo 网格系
   含体积质心/主轴，STL 里没有），新增 `testbed/src/console/g1-mesh.ts`（零依赖 STL 解析 + 烘焙 + 世界矩阵）与 `g1-ws-mesh.ts`，
   浏览器与 Node 探针共用同一份数学；烘焙顶点与 MuJoCo `mesh_vert` 逐 geom 世界包围盒差 1e-7 m。
