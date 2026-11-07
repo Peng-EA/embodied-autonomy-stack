@@ -8,7 +8,7 @@ import './style.css';
 import { Vitals } from './vitals.ts';
 import { Planner, STALE_AGE_MS, type PlanOutcome } from './plan.ts';
 import { Affect } from './affect.ts';
-import { RoomPhysics } from './physics.ts';
+import { RoomPhysics, SPAWN } from './physics.ts';
 import type { Body } from './body.ts';
 import { CmdGate } from './cmd-gate.ts';
 import { CapsuleBody } from './capsule-body.ts';
@@ -152,7 +152,7 @@ for (const s of [-1, 1]) {
   char.add(leg); legs.push(leg);
 }
 
-char.position.set(0, 0, 0.4);
+char.position.set(SPAWN.x, 0, SPAWN.z); // 出生点唯一来源：physics.ts 的 SPAWN
 char.rotation.y = 0; // 默认面向镜头（+Z）
 let yawOffset = 0; // 模型自身朝向与 +Z 的偏差（装模型时确定）
 scene.add(char);
@@ -419,8 +419,8 @@ const spots: Record<string, [number, number]> = {
   桌边: [1.05, -1.15],
   床边: [-1.25, 0.95],
   窗边: [-0.95, -1.95],
-  中间: [0, 0.4],
-  原地: [0, 0.4],
+  中间: [SPAWN.x, SPAWN.z],
+  原地: [SPAWN.x, SPAWN.z],
 };
 
 function go(name: string) {
@@ -810,8 +810,8 @@ $('btn-pause').onclick = () => {
 };
 $('btn-body').onclick = () => void useBody(bodyKind === 'g1' ? 'capsule' : 'g1');
 $('btn-reset').onclick = () => {
-  char.position.set(0, 0, 0.4);
-  if (body) body.reset(0, 0.4);
+  char.position.set(SPAWN.x, 0, SPAWN.z);
+  if (body) body.reset(SPAWN.x, SPAWN.z);
   mode = 'idle';
   target = null;
   setAction('待机');

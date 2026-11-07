@@ -12,12 +12,33 @@ import RAPIER from '@dimforge/rapier3d-compat';
 export const CAPSULE_R = 0.22;
 export const CAPSULE_HALF = 0.5; // 圆柱段半高，总高 ≈ 2*(0.5+0.22) = 1.44 m
 
+/**
+ * 出生点（three 系：x 右、y 上、z 朝屏幕外）——**唯一来源**，别的地方一律 import，不许再抄这两位数。
+ *
+ * 只放水平分量：竖直是"胶囊站高"= CAPSULE_HALF + CAPSULE_R + 0.02，由物理常数推出来，
+ * 写死成字面量就等于又多了一份数。
+ *
+ * 谁在读它：页面 main.ts（角色起点 / 中间·原地预设 / 重置按钮）、无头探针
+ * probe-idle.mjs 与 probe-autonomy.mjs；scripts/check-scene-parity.mjs 机械断言
+ * 下面的 setTranslation(...) 与它同值，且两者都与 sim/env/scene_room.json 的 agent.spawn 一致。
+ *
+ * 2026-11-08：从 (0, 0.4) 迁到 (1.3, 1.2) —— 旧点离边几只有 0.273 m（低于 L2 的 0.22 告警线附近）。
+ */
+export const SPAWN = { x: 1.3, z: 1.2 } as const;
+
 export class RoomPhysics {
-  private constructor(
-    private readonly world: any,
-    private readonly body: any,
-    private readonly eq: any,
-  ) {}
+  private readonly world: any;
+  private readonly body: any;
+  private readonly eq: any;
+
+  // 这里不用参数属性（constructor(private readonly world: any)）：Node 的 strip-only /
+  // --experimental-strip-types 只接受可擦除语法，参数属性在 import 这一层就报错。
+  // 无头探针要直接 import 本文件拿 SPAWN，所以保持显式字段 + 赋值。
+  private constructor(world: any, body: any, eq: any) {
+    this.world = world;
+    this.body = body;
+    this.eq = eq;
+  }
 
   static async create(): Promise<RoomPhysics> {
     await RAPIER.init();
@@ -43,7 +64,7 @@ export class RoomPhysics {
 
     const body = world.createRigidBody(
       R.RigidBodyDesc.dynamic()
-        .setTranslation(1.3, CAPSULE_HALF + CAPSULE_R + 0.02, 1.2) // spawn_clearance=1.295 m（最近=矮桌）
+        .setTranslation(SPAWN.x, CAPSULE_HALF + CAPSULE_R + 0.02, SPAWN.z) // 出生点：水平来自 SPAWN，竖直=胶囊站高
         .lockRotations()
         .setLinearDamping(0.4)
         .setCcdEnabled(true),

@@ -28,6 +28,8 @@
 
 import { G1BodyWs } from '../src/console/g1-body-ws.ts';
 import { CmdGate } from '../src/console/cmd-gate.ts';
+// 出生点只有一处：physics.ts 的 SPAWN（页面与探针读同一份，别再各写一遍数）
+import { SPAWN } from '../src/console/physics.ts';
 import { EXIT, PortAcquireError, acquireSimServer, healthJson, serverLine, wsCtor } from './lib/sim-server.mjs';
 
 const LIMITS = { firstCmd: 1e-6, movedM: 0.05 };
@@ -77,7 +79,7 @@ async function main() {
   const health0 = await healthJson(server.healthUrl);
 
   // 页面 useBody() 的动作：先 reset（发一帧 0，这是真实上行，不是伪造），再进 animate
-  body.reset(0, 0.4);
+  body.reset(SPAWN.x, SPAWN.z);
 
   // 页面的闸门：用户没输入 → 未授权；首帧 state 到手 → 对齐 yaw 零位
   const gate = new CmdGate();

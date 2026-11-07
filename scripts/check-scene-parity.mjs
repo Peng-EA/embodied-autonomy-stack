@@ -14,7 +14,9 @@
 //   2. physics.ts 的 CAPSULE_R / CAPSULE_HALF -> scene_room.json 的 agent.capsule_r / capsule_half；
 //   3. 双向：scene_room.json 多出来的盒子也算不一致（那等于凭空加家具）；
 //   4. 条数对不上（少搬 / 多搬）直接失败；
-//   5. 出生点净空：spawn(x, z) 到每个 box（地板除外）水平 AABB 的最小距离必须 >= 0.60 m。
+//   5. 出生点唯一来源：physics.ts 的 .setTranslation(...) 水平分量必须是导出的 SPAWN.x / SPAWN.z
+//      （或与 SPAWN 同值的数），两者逐字段比——防"常量改了、setTranslation 没跟"，也防又写回字面量；
+//   6. 出生点净空：spawn(x, z) 到每个 box（地板除外）水平 AABB 的最小距离必须 >= 0.60 m。
 //      这条不是"防抄错"，是防**选点**：出生就贴着家具时 L2 的 clearance 从 t=0 触发，
 //      2026-11-08 那次 spawn=(0, 0.4) 到边几只有 0.273 m（实测起步 clearance 0.127 < 0.22）。
 //      0.60 = 告警线 0.22 的 2.7 倍；不是阈值，别拿它去改 C.CLEARANCE_WARN。
@@ -68,6 +70,20 @@ function parseCapsule(source) {
     return m ? Number(m[1]) : NaN;
   };
   return { capsule_r: grab('CAPSULE_R'), capsule_half: grab('CAPSULE_HALF') };
+}
+
+/** physics.ts 的出生点唯一来源：export const SPAWN = { x: 1.3, z: 1.2 } as const */
+function parseSpawn(source) {
+  const m = source.match(
+    /export const SPAWN\s*=\s*\{\s*x:\s*(-?\d+(?:\.\d+)?)\s*,\s*z:\s*(-?\d+(?:\.\d+)?)\s*,?\s*\}\s*as const/,
+  );
+  if (!m) {
+    problems.push(
+      'physics.ts 里找不到 export const SPAWN = { x, z } as const（出生点唯一来源；页面与无头探针都 import 它）',
+    );
+    return null;
+  }
+  return { x: Number(m[1]), z: Number(m[2]) };
 }
 
 function compareVec(label, field, got, want) {
@@ -132,22 +148,52 @@ const agent = scene.agent || {};
 compareNum('agent.capsule_r', Number(agent.capsule_r), capsule.capsule_r);
 compareNum('agent.capsule_half', Number(agent.capsule_half), capsule.capsule_half);
 
-// 出生点：physics.ts 的 .setTranslation(0, CAPSULE_HALF + CAPSULE_R + 0.02, 0.4)
-// 水平分量（x, z）搬进 scene_room.json 的 agent.spawn；竖直分量必须是胶囊站高的表达式，
-// 不许在 physics.ts 里改成字面量（那等于又抄了一遍数）。
+// 出生点：physics.ts 的 .setTranslation(SPAWN.x, CAPSULE_HALF + CAPSULE_R + 0.02, SPAWN.z)
+// 水平分量必须是 SPAWN 的 x/z（或与 SPAWN 同值的数），竖直分量必须是胶囊站高的表达式——
+// 两条都是"只许有一份数"：竖直写死等于又抄一遍常数，水平写字面量等于 SPAWN 成了摆设。
+// 这组数再从 SPAWN 搬进 scene_room.json 的 agent.spawn（下面接着比）。
+const spawnConst = parseSpawn(physicsSrc);
 const spawnMatch = physicsSrc.match(
-  /setTranslation\(\s*(-?\d+(?:\.\d+)?)\s*,\s*([^,]+?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/,
+  /\.setTranslation\(\s*(-?\d+(?:\.\d+)?|SPAWN\.x)\s*,\s*([^,]+?)\s*,\s*(-?\d+(?:\.\d+)?|SPAWN\.z)\s*\)/,
 );
 const spawn = agent.spawn || {};
+/** setTranslation 的水平实参 -> 数值；写 SPAWN.x / SPAWN.z 就走常量，写字面量就按字面量比 */
+const resolveTerm = (tok, axis) => {
+  if (tok === 'SPAWN.x' || tok === 'SPAWN.z') return spawnConst ? spawnConst[axis] : NaN;
+  return Number(tok);
+};
 if (!spawnMatch) {
-  problems.push('physics.ts 里没解析到 setTranslation(x, ..., z)（胶囊出生点）');
+  problems.push('physics.ts 里没解析到 .setTranslation(x, ..., z)（胶囊出生点）');
 } else {
-  const [, sx, sy, sz] = spawnMatch;
+  const [, rawX, sy, rawZ] = spawnMatch;
   if (!/CAPSULE_HALF/.test(sy) || !/CAPSULE_R/.test(sy)) {
     problems.push('physics.ts 的出生点竖直分量不再是 CAPSULE_HALF + CAPSULE_R + ...（scene_room.json 的 y 是从它推的）');
   }
-  compareNum('agent.spawn.x', Number(spawn.x), Number(sx));
-  compareNum('agent.spawn.z', Number(spawn.z), Number(sz));
+  const px = resolveTerm(rawX, 'x');
+  const pz = resolveTerm(rawZ, 'z');
+  // 断言：setTranslation(...) 与导出的 SPAWN 必须同值（防两处漂移 / 防又写回字面量）
+  if (spawnConst) {
+    if (!Number.isFinite(px) || Math.abs(px - spawnConst.x) > EPS) {
+      problems.push(
+        'physics.ts 的 setTranslation 横坐标与导出的 SPAWN.x 不一致：setTranslation=' + rawX +
+          '  SPAWN=(' + fmt(spawnConst.x) + ', ' + fmt(spawnConst.z) + ')',
+      );
+    }
+    if (!Number.isFinite(pz) || Math.abs(pz - spawnConst.z) > EPS) {
+      problems.push(
+        'physics.ts 的 setTranslation 纵坐标与导出的 SPAWN.z 不一致：setTranslation=' + rawZ +
+          '  SPAWN=(' + fmt(spawnConst.x) + ', ' + fmt(spawnConst.z) + ')',
+      );
+    }
+    if (rawX !== 'SPAWN.x' || rawZ !== 'SPAWN.z') {
+      problems.push(
+        'physics.ts 的 setTranslation 水平分量必须直接引用 SPAWN.x / SPAWN.z（当前是 ' + rawX + ', ' + rawZ +
+          '）——字面量与 SPAWN 是两份数，迟早漂移',
+      );
+    }
+  }
+  compareNum('agent.spawn.x', Number(spawn.x), px);
+  compareNum('agent.spawn.z', Number(spawn.z), pz);
 }
 
 // ---------- 出生点净空（>= SPAWN_CLEAR_MIN）----------
@@ -192,7 +238,7 @@ if (Number.isFinite(Number(spawn.x)) && Number.isFinite(Number(spawn.z))) {
   }
 }
 
-const compared = fixed.length * 2 + 5; // 每个盒子比 center+half，再加两个胶囊常数 + 出生点 x/z + 出生点净空
+const compared = fixed.length * 2 + 7; // 每个盒子比 center+half，再加两个胶囊常数 + 出生点 x/z + SPAWN 同值（x/z）+ 出生点净空
 
 // ---------- 结论 ----------
 
@@ -210,7 +256,9 @@ console.log(
   '  范围：' + fixed.map((f) => f.label).join(' / ') + '；胶囊 r/' + fmt(capsule.capsule_r) + ' half/' + fmt(capsule.capsule_half),
 );
 console.log(
-  '  出生点：spawn=(' + fmt(spawn.x) + ', ' + fmt(spawn.z) + ')_three 净空=' +
+  '  出生点：SPAWN=(' + fmt(spawnConst ? spawnConst.x : NaN) + ', ' + fmt(spawnConst ? spawnConst.z : NaN) + ')' +
+    ' setTranslation=(' + (spawnMatch ? spawnMatch[1] + ', ' + spawnMatch[3] : 'n/a') + ')' +
+    ' scene_room.json=(' + fmt(spawn.x) + ', ' + fmt(spawn.z) + ')_three 净空=' +
     spawnClearance.toFixed(3) + ' m（最近 "' + spawnNearest.label + '" id=' + spawnNearest.id +
     '，门槛 ' + SPAWN_CLEAR_MIN.toFixed(2) + ' m）',
 );

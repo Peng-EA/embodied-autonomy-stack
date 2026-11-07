@@ -43,11 +43,13 @@ import {
   healthJson,
   serverLine,
 } from './lib/sim-server.mjs';
+// 出生点只有一处：physics.ts 的 SPAWN（页面与探针读同一份，别再各写一遍数）
+import { SPAWN } from '../src/console/physics.ts';
 
 const TESTBED = path.join(ROOT, 'testbed');
 const LIMITS = { aMoved: 0.05, bMoved: 0.5, yMin: 0.5 };
 /**
- * 强制 L4 的目标点：从 spawn (0, 0.4) 沿世界 +x 走 1.2 m —— 机器人初始朝向就是 +x
+ * 强制 L4 的目标点：从 spawn 沿世界 +x 走 1.2 m —— 机器人初始朝向就是 +x
  * （服务端 yaw=0 时 "走路" 那一档实测就走 +x），所以这条是"正前方直线走过去"。
  *
  * 为什么不用斜前方 / 背向：页面与服务端之间的坐标约定还有 90° 偏差（页面 heading 用
@@ -56,7 +58,7 @@ const LIMITS = { aMoved: 0.05, bMoved: 0.5, yMin: 0.5 };
  * 侧移、撞上矮桌，然后被 L2 反射打断 —— 那是 P0d/P2b 遗留的**既有**问题，不属于 P0e
  * （本切片只做授权通道），在回传里记了名，没有在这里偷偷绕过去改判据。
  */
-const FORCE_TARGET = { x: 1.2, z: 0.4 };
+const FORCE_TARGET = { x: SPAWN.x + 1.2, z: SPAWN.z };
 
 function parseArgs(argv) {
   const out = {
