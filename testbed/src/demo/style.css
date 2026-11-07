@@ -215,6 +215,15 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 400px; min-height: 0
 .hint { margin: 6px 0 0; font-size: var(--fs-sm); line-height: 1.5; color: var(--ink-4); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hint.warn { color: var(--warn); }
 
+/* 摔倒提示：y < 0.5 时出现。醒目但不新开字号档——仍用 --fs-sm（demo-check 数字号种类） */
+.fallen {
+  margin: 6px 0 0; padding: 5px 9px; border-radius: 8px;
+  font-size: var(--fs-sm); line-height: 1.4; letter-spacing: .02em;
+  color: #f0c0c0; background: #2a1618; border: 1px solid #5a3436;
+  font-family: var(--mono);
+}
+.fallen.hide { display: none; }
+
 /* 滑杆 ---------------------------------------------------------------- */
 .row { margin: 0 0 8px; }
 .row:last-child { margin-bottom: 2px; }

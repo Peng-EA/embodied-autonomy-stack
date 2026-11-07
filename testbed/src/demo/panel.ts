@@ -140,6 +140,15 @@ export class Panel {
     }
   }
 
+  /**
+   * 摔倒标记：y < 0.5 时出现（demo.html 的 #st-fallen）。
+   * 只切 class，不新建元素/字号——面板字号只有两档，demo-check 会数字号种类。
+   */
+  fallen(on: boolean): void {
+    const el = document.getElementById('st-fallen');
+    if (el) el.classList.toggle('hide', !on);
+  }
+
   gate(text: string, warn = false): void {
     this.gateEl.textContent = text;
     this.gateEl.classList.toggle('warn', warn);

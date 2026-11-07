@@ -7,7 +7,9 @@ import type { MeshMeta, MjPose } from './g1-mesh.ts';
 //
 // 边界清单（P0b 实测出来的，不要当"仿真人形"读）：
 // - 服务端没有步态（P2b 才解决）：cmd 里的速度不产生位移，blocked 恒为 true 是"想走走不动"。
-// - 服务端没有 /reset：reset() 只能把指令清零，骨盆位置由服务端说了算（界面「复位」对这一档是空操作）。
+// - 服务端有 **HTTP POST /reset**（D2）：复位 = 回到 keyframe stand + spawn，清 cmd/jointTargets/
+//   模式/ramp，由服务端在物理 tick 边界执行。reset() 因此是**真的复位**，不是只清指令。
+//   失败时降级为「只清上行指令」，但**不静默**：结果一律经 onReset 回执给界面打 sys 事件。
 // - 帧里带 geom.xpos / geom.xmat（72 个 geom，three 系）但**不带网格**：G1 要画出来仍需 wasm 那份
 //   meshes / parts，本文件只负责 BodyState。想看网格照旧 ?sim=wasm；几何搬到服务端是 P0c。
 // - 断线不伪造数据：degraded=true，state() 返回**最后一帧真实状态**（t 停在原处）；
@@ -25,6 +27,29 @@ const TICK_DT_SIM = 0.016;
 const SEND_PERIOD_MS = 1000 / 60;
 /** 超过这么久没新帧就算 stale（60 Hz 下等于丢 30 帧） */
 const STALE_MS = 500;
+/**
+ * POST /reset 的超时（失败检测，不是效果预算）。
+ *
+ * 服务端承诺「2 s 内落到 tick 边界」（/reset 自己等 2 s 才 503）；客户端多给 1 s 余量：
+ * 这台机器上无头 Edge（SwiftShader 画 39 万三角）+ Python 物理环会抢 CPU，实测偶发把一次
+ * 正常的 20 ms 回执拖到 2 s 以上 —— 那会把成功误报成失败、进而误降级，是假失败。
+ */
+export const RESET_TIMEOUT_MS = 3000;
+
+/**
+ * ws://host:port/sim → http://host:port/reset（同一个服务端的 HTTP 入口）。
+ *
+ * 只换协议与路径，不动 host/port：出生点与复位都在服务端，浏览器不另说一套。
+ * 探针与页面共用这一个换算，别各写一份。
+ */
+export function resetUrlOf(wsUrl: string): string {
+  const u = new URL(wsUrl);
+  u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
+  u.pathname = '/reset';
+  u.search = '';
+  u.hash = '';
+  return u.href;
+}
 
 /** 服务端 state 帧（键见 sim_server/app.py 的 snapshot） */
 export interface G1WsFrame {
@@ -67,6 +92,13 @@ export interface G1WsStats {
 export interface G1WsOptions {
   /** 运行期断线超过 fallbackAfterMs 仍未恢复时回调一次（界面据此打 sys 事件） */
   onFallback?: (reason: string) => void;
+  /**
+   * 复位回执（成功 / 失败都回调一次，界面据此打 sys 事件 —— **不许静默**）。
+   * 失败时 reset() 已经降级为「只清上行指令」，detail 里写明原因与降级后果。
+   */
+  onReset?: (ok: boolean, detail: string) => void;
+  /** POST /reset 超时（ms），默认 RESET_TIMEOUT_MS */
+  resetTimeoutMs?: number;
   connectTimeoutMs?: number;
   fallbackAfterMs?: number;
   /** 注入 WebSocket 实现：浏览器默认 globalThis.WebSocket；node 探针传 ws（原生实现发不了 ping） */
@@ -90,8 +122,12 @@ export class G1BodyWs implements Body {
   /** 没有可用数据（未连上 / 断线 / 帧停了）时为 true。它不替数据说话——它是"别信这帧"的旗标。 */
   degraded = true;
   onFallback: ((reason: string) => void) | undefined;
+  onReset: ((ok: boolean, detail: string) => void) | undefined;
 
   private readonly url: string;
+  /** 复位端点（由 ws 地址推出来，见 resetUrlOf） */
+  private readonly resetUrl: string;
+  private readonly resetTimeoutMs: number;
   private readonly ctor: unknown;
   private readonly connectTimeoutMs: number;
   private readonly fallbackAfterMs: number;
@@ -126,11 +162,14 @@ export class G1BodyWs implements Body {
 
   private constructor(url: string, opts: G1WsOptions) {
     this.url = url;
+    this.resetUrl = resetUrlOf(url);
+    this.resetTimeoutMs = opts.resetTimeoutMs ?? RESET_TIMEOUT_MS;
     this.ctor = opts.WebSocketCtor ?? (globalThis as any).WebSocket;
     this.connectTimeoutMs = opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
     this.fallbackAfterMs = opts.fallbackAfterMs ?? 10000;
     this.rttEveryMs = opts.rttEveryMs ?? 250;
     this.onFallback = opts.onFallback;
+    this.onReset = opts.onReset;
     this.degradedSince = performance.now();
   }
 
@@ -143,10 +182,61 @@ export class G1BodyWs implements Body {
 
   // ---------------------------------------------------------------- Body 契约
 
-  /** 服务端没有 /reset：这里只能把指令清零。位置复位要重启 sim_server。 */
+  /**
+   * 复位：**真的**让服务端回到 keyframe stand + spawn（POST /reset，tick 边界执行）。
+   *
+   * 上行先清指令（这是失败时的降级路径，成功时也无害），随后异步 POST 复位端点；
+   * 结果一律经 onReset 回执出去（失败要打 sys 事件，不许静默）。
+   * body.ts 的 reset(x, z) 仍是 void：x/z **不发给服务端** —— 出生点是 scene_room.json 的
+   * 单一真源（scripts/check-scene-parity.mjs 机械对齐），浏览器不许另说一套坐标。
+   */
   reset(_x: number, _z: number): void {
     this.lastSentAt = -1e9;
     this.send({ vx: 0, vz: 0, yaw: 0 });
+    void this.postReset();
+  }
+
+  /** POST /reset 并回报执；任何失败都降级成「只清指令」并把原因写进 detail。 */
+  private async postReset(): Promise<void> {
+    const url = this.resetUrl;
+    const ms = this.resetTimeoutMs;
+    try {
+      if (typeof fetch !== 'function') throw new Error('运行环境没有 fetch（node 需 ≥18 / 浏览器原生支持）');
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), ms);
+      let res: Response;
+      try {
+        // 不带 body / 自定义头：简单请求，不需要预检；跨源回执靠服务端的 Allow-Origin
+        res = await fetch(url, { method: 'POST', signal: ac.signal, cache: 'no-store' });
+      } finally {
+        clearTimeout(timer);
+      }
+      let body: any = null;
+      try {
+        body = await res.json();
+      } catch {
+        body = null;
+      }
+      if (!res.ok || !body || body.ok !== true) {
+        throw new Error('HTTP ' + res.status + ' ' + JSON.stringify(body ?? '(非 JSON 回执)'));
+      }
+      const t = typeof body.tSim === 'number' ? Number(body.tSim) : NaN;
+      this.onReset?.(
+        true,
+        '复位完成 · ' + url + ' · tSim=' + (Number.isFinite(t) ? t.toFixed(3) : '?') + ' s · mode=' + String(body.mode ?? '?'),
+      );
+    } catch (e) {
+      const why =
+        e instanceof Error
+          ? e.name === 'AbortError'
+            ? '超时 ' + ms + ' ms'
+            : e.message
+          : String(e);
+      this.onReset?.(
+        false,
+        '复位失败（' + why + '）→ 已降级为只清上行指令；位置仍由服务端决定（' + url + '）',
+      );
+    }
   }
 
   /** 每帧调用：指令按 60 Hz 上限发给服务端，返回**最近一帧真实状态**（不等下一帧，不插值） */

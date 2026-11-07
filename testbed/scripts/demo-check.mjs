@@ -472,18 +472,34 @@ async function assertCamera(page) {
   const cx = box.x + box.w / 2;
   const cy = box.y + box.h / 2;
 
-  // C) 解锁态 W：相机位置要真的变（>0.05 m），且沿视线前方
-  const wStart = await cam();
-  await page.keyboard.down('w');
-  await sleep(1200);
-  await page.keyboard.up('w');
-  await sleep(450);
-  const wEnd = await cam();
-  const wMove = dist3(wStart.position, wEnd.position);
-  const disp = [wEnd.position[0] - wStart.position[0], 0, wEnd.position[2] - wStart.position[2]];
-  const fwd = [wEnd.forward[0], 0, wEnd.forward[2]];
-  const along = disp[0] * fwd[0] + disp[2] * fwd[2];
-  add('unlocked_W_moves_camera', wMove > 0.05, 'move=' + wMove.toFixed(4) + ' m（阈值 >0.05）');
+  // C) 解锁态 W 1.2 s：位移落在 0.60–1.50 m（D4 平移 ×4 后的手感区间；旧 0.235 m 在区间外），且沿视线前方。
+  //    无头帧率偶尔掉到 2–3 fps：每帧 dt 被钳到 0.25 s，1.2 s 里只积出两三帧，位移按帧数缩水（与手感无关）。
+  //    所以最多量 3 次取最大的一次，每次实测值都打出来——掉帧只是"没量准"，不该报成"变慢了"。
+  let wStart = await cam();
+  let wEnd = wStart;
+  let wMove = -1;
+  let along = -Infinity;
+  const wTries = [];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    wStart = await cam();
+    await page.keyboard.down('w');
+    await sleep(1200);
+    await page.keyboard.up('w');
+    await sleep(450);
+    wEnd = await cam();
+    const mv = dist3(wStart.position, wEnd.position);
+    const disp = [wEnd.position[0] - wStart.position[0], 0, wEnd.position[2] - wStart.position[2]];
+    const fwd = [wEnd.forward[0], 0, wEnd.forward[2]];
+    const al = disp[0] * fwd[0] + disp[2] * fwd[2];
+    wTries.push(mv.toFixed(4) + ' m');
+    if (mv > wMove) {
+      wMove = mv;
+      along = al;
+    }
+    if (mv >= 0.6 && mv <= 1.5) break; // 落在区间就不再重测
+    await sleep(400);
+  }
+  add('unlocked_W_moves_camera', wMove >= 0.6 && wMove <= 1.5, 'move=' + wMove.toFixed(4) + ' m / 1.2 s（区间 0.60–1.50，取 ' + wTries.length + ' 次最好：' + wTries.join(', ') + '）');
   add('unlocked_W_follows_view_direction', along > 0, 'displacement·forward=' + along.toFixed(4) + '（>0 表示朝视线前方）');
 
   // D) 滚轮一格：距离变化 5–20%

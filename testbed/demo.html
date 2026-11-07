@@ -67,6 +67,8 @@
                 <div class="stat"><span>dropped</span><div class="v"><b id="st-drop">—</b></div></div>
                 <div class="stat"><span>接触</span><div class="v"><b id="st-ncon">—</b></div></div>
               </div>
+              <!-- 摔倒提示：BodyState.y < 0.5 时显示（demo/main.ts 每 0.2 s 判一次） -->
+              <p class="fallen hide" id="st-fallen" role="status">已摔倒 · 按「复位」恢复站立</p>
               <p class="hint" id="gate-hint">闸门：未授权（首帧 cmd 恒为 0）</p>
             </section>
 

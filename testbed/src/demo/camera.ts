@@ -10,7 +10,8 @@ import * as THREE from 'three';
 //   · 锁定 → 0.4 s 平滑回到默认构图，此后输入全部无效
 // 不引新依赖。
 //
-// 手感原则：宁慢勿快。平移 0.20 m/s、滚轮 10%/格、旋转 0.15°/px；
+// 手感原则：平移跟手、缩放/旋转宁慢勿快。平移 0.80 m/s（D4 由 0.20 m/s 提 4×）、
+// 滚轮 10%/格、旋转 0.15°/px（后两者 D4 未动）；
 // 三个通道都是"目标值 + 指数趋近"，松键/松手后速度衰减到 0，不会一甩就飞。
 
 const DEG = Math.PI / 180;
@@ -21,7 +22,7 @@ const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2,
 
 /** 手感参数。改这里等于改手感（验收数字对照的就是这几个） */
 export interface CameraTuning {
-  /** 平移速度 m/s（验收量级 0.15–0.25） */
+  /** 平移速度 m/s（验收：按 W 1.2 s 位移 0.60–1.40 m，实测口径见 demo-check --camera） */
   panSpeed: number;
   /** 滚轮每格缩放比例（0.10 = 10%，验收 8–12%） */
   zoomStep: number;
@@ -35,7 +36,7 @@ export interface CameraTuning {
 }
 
 export const CAMERA_TUNING: CameraTuning = {
-  panSpeed: 0.2,
+  panSpeed: 0.8,
   zoomStep: 0.1,
   rotateDegPerPx: 0.15,
   transitionSec: 0.4,
@@ -43,7 +44,10 @@ export const CAMERA_TUNING: CameraTuning = {
   maxDist: 12,
 };
 
-/** 指数趋近的时间常数（s）：越小越跟手，越大越"黏" */
+/** 指数趋近的时间常数（s）：越小越跟手，越大越"黏"
+ *  PAN_TAU 与速度同比：速度 ×4 时 τ 不变 ⇒ 起速时间仍是 ~0.12 s（不会一按就窜），
+ *  松键后的滑行时间也还是 ~0.12 s，只有滑行距离随速度按比例放大（≈0.10 m @0.8 m/s）。
+ */
 const PAN_TAU = 0.12;
 const ROT_TAU = 0.06;
 const ZOOM_TAU = 0.1;

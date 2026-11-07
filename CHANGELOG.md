@@ -11,6 +11,10 @@
 
 ### Added
 
+- **演示台复位 + 摄像机提速（D2 / D4）**：服务端新增 `POST /reset`（只排队，`sim_loop` 在物理 tick 边界执行 keyframe+spawn 复位，
+  清 cmd/模式/ramp，返回 `resetCount`），面板「复位」因此是真复位；`y<0.5` 时状态区出现"已摔倒"标记；
+  新增 `probe-reset.mjs`（真撞摔倒 → 复位 → 2 s 内站起、回 spawn）。摄像机平移 `PAN` 0.20 → **0.80 m/s**（×4），
+  滚轮缩放与右键旋转未动。
 - **G1 可视化演示台（`testbed/demo.html`）**：一条命令 `node testbed/scripts/serve-demo.mjs --port 5183` 起「静态页 + 自选端口 sim_server」，
   右侧面板实时可调（前进/侧移/转向三滑杆、站立·走·停·动作·IK·复位、自主闸门、射线/接触/曲线开关、四个预设），
   只读区显示 MODE/速度/高度/tSim/帧龄/丢帧/接触数/闸门来源。指令仍只经 `cmd-gate.ts`，面板不绕过闸门。

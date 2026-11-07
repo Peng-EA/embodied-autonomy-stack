@@ -725,6 +725,8 @@ async function openG1(): Promise<void> {
     try {
       g1ws = await G1BodyWs.create(SIM_WS, {
         onFallback: (why) => pushLog('sys', 'sim_server 掉线未恢复：' + why + ' → degraded（停在最后一帧真实状态，不编数据）'),
+        // 复位回执：成功/失败都打一条 sys（失败已降级为只清指令，绝不静默）
+        onReset: (_ok, detail) => pushLog('sys', detail),
       });
       (window as any).__g1ws = g1ws;
       pushLog('sys', 'WS 身体就绪 · ' + SIM_WS + ' · ' + g1ws.jointNames.length + ' 关节 · 状态来自 Python 权威环（60 Hz）');

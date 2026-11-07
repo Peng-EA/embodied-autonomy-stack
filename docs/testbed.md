@@ -426,8 +426,14 @@ Ctrl+C 一起退（`--exit-after N` 是给脚本化验证用的，走同一条 s
 
 **摄像机（舞台右上角图标）**：点一下解锁，之后 `WASD` 平移、`空格` 升 / `Shift` 降（按当前视角方向）、滚轮缩放、
 **按住鼠标右键拖动**旋转（左键不抢，留给画面交互）；再点一下锁定，所有输入立即失效并 0.4 s 平滑回默认机位。
-手感参数集中在 `src/demo/camera.ts` 的 `CAMERA_TUNING`，量级**宁慢勿快**：实测按 W 1.2 s 位移 0.235 m、滚轮一格 10%、
+手感参数集中在 `src/demo/camera.ts` 的 `CAMERA_TUNING`，平移速度 0.80 m/s（D4 由 0.20 提 4×，`PAN_TAU` 不变所以起速仍 ~0.12 s、不会一按就窜），缩放与旋转**未动**；实测按 W 1.2 s 位移 0.235 m、滚轮一格 10%、
 右键 0.139°/px。摄像机与跟随用墙钟 dt（物理与指令仍 50 ms）——无头 SwiftShader 只有 ~4.7 fps，用被夹到 50 ms 的 dt 会让镜头慢放 4 倍。
+
+**复位（D2，真复位不是清指令）**：面板「复位」走服务端 `POST /reset`——服务端**只排队**，真正的
+`mj_resetDataKeyframe(stand)` + 回 spawn + 清 cmd/jointTargets/模式/ramp 由 `sim_loop` 在**物理 tick 边界**执行
+（绝不与 `mj_step` 抢 `MjData`），返回 `{ok,tSim,mode,x,y,z,resetCount}`；失败时客户端降级为"只清上行指令"并在事件流写明后果。
+`y<0.5` 时状态区出现"已摔倒"标记，按一下就能站起来。验收 `testbed/scripts/probe-reset.mjs`：真撞桌摔倒（40 s 内不摔算 FAIL）
+→ `POST /reset` → 2 s 内 `y≥0.77`、回 spawn（误差 ≤0.05 m）、`mode=HOLD`。**它真跑 100 Hz 物理 + 无头浏览器，很吃 CPU**，别和别的重活并排开。
 
 **布局验收**：`node testbed/scripts/demo-check.mjs` 会用 `getBoundingClientRect` 断言 26 项 ×2 个视口（1440×900 / 1280×800）没有元素被裁，
 并生成两张截图到 `testbed/logs/`。1440×900 一屏可见；1280×800 只有"显示"区落在可滚区（底部渐隐 + "▾ 更多"提示）。

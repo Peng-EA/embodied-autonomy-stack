@@ -5,6 +5,11 @@
   C -> S  {"t": <client_ts>, "cmd": {"vx": <m/s>, "vz": <m/s>, "yaw": <rad>}, "jointTargets": {...}|null}
           P2a 追加：{"mimic": "play"|"stop"}   —— 播一段现成 mimic 动作（动作，不是走路）
           P3 追加：{"ik": "play"|"stop"}       —— 右手伸到 scene.json 的 ik_targets 取杯点
+
+  C -> S  HTTP POST /reset                —— 复位（D2）：回到 keyframe stand + spawn，清指令/模式/ramp
+          S -> C {"ok": true, "tSim": <复位后的仿真秒>, "mode": "HOLD", "x", "y", "z", "resetCount"}
+          **只排队，不直接动 MjData**：真正的 mj_resetDataKeyframe 由 sim_loop 在 tick 边界执行
+          （见 SimRuntime.request_reset / apply_pending_reset），绝不与 mj_step 抢 data。
   S -> C  {"tSim", "x", "y", "z", "yaw", "speed", "blocked", "joints",
            "geom": {"xpos": [...], "xmat": [...]}, "contacts": <n>, "mode": "HOLD"|"POLICY"|"MIMIC"}
 
@@ -49,12 +54,23 @@ from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 
 from sim.env.g1_modes import ModeController
 from sim.env.g1_sim import PoseHold, STEPS_PER_TICK, TICK_HZ, World
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8788
+
+# POST /reset 的跨源头：演示页在另一个端口（serve-demo 静态服务），而要复位的是这台 sim_server。
+# 不带这行，浏览器会拿不到回执（请求其实到了，fetch 却 reject）——那等于「复位成功却报失败」。
+CORS_ANY = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "content-type",
+}
+# 端点等 tick 边界的上限：物理环正常时是 1 个 tick（16 ms），等不到就是环停了，必须报出来
+RESET_WAIT_MAX_S = 2.0
 
 
 def _r6(v: float) -> float:
@@ -75,13 +91,56 @@ class SimRuntime:
         self.contacts = 0
         self.ticks = 0
         self.last_error: str | None = None
+        # D2 复位：端点只置位 + 登记等待者，动 MjData 的是 sim_loop 在 tick 边界调的
+        # apply_pending_reset()。pending_reset 为 True 期间**不会有** mj_step 进来。
+        self.pending_reset = False
+        self.reset_count = 0
+        self.last_reset_t: float | None = None
+        self._reset_waiters: list[asyncio.Event] = []
         self.reset()
 
     def reset(self) -> None:
+        """回到 keyframe 'stand' + spawn，并把指令 / 模式 / ramp / 刹车一起清干净。
+
+        **只许在 tick 边界调用**（apply_pending_reset / 构造时）：mj_resetDataKeyframe 会重写
+        qpos / qvel，和正在跑的 mj_step 抢 MjData 没有定义顺序。端点自己不调它。
+        """
+        # 物理：keyframe stand（含 key_ctrl）+ scene.json 的 agent.spawn（见 World.reset 的注释）
         self.world.reset()
+        # 模式机：mode=HOLD、alpha=0、braking/brake_t/ramp 归位；增益写回 kp=500
         self.mode.reset()
+        # 上行指令与 jointTargets 是 SimRuntime 这一层的状态，mode.reset() 管不到它们
+        self.cmd = {"vx": 0.0, "vz": 0.0, "yaw": 0.0}
+        self.joint_targets = None
+        self.mode.set_joint_targets(None)   # 清掉被 jointTargets 覆盖掉的 29 个目标
         self.contacts = int(self.world.data.ncon)
         self.ticks = 0
+
+    # ---------- 复位（HTTP POST /reset 的入口） ----------
+
+    def request_reset(self) -> asyncio.Event:
+        """登记一次复位请求，返回「已在 tick 边界执行完」才 set 的 Event。
+
+        这里只置位，**不动 MjData**：sim_loop 每轮先 apply_pending_reset() 再 tick，
+        所以复位一定落在两个物理 tick 之间，不会和 mj_step 抢 data。
+        """
+        done = asyncio.Event()
+        self._reset_waiters.append(done)
+        self.pending_reset = True
+        return done
+
+    def apply_pending_reset(self) -> bool:
+        """在 tick 边界执行排队中的复位；返回这一轮是否真的复位了。"""
+        if not self.pending_reset:
+            return False
+        self.pending_reset = False
+        self.reset()
+        self.reset_count += 1
+        self.last_reset_t = float(self.world.data.time)
+        waiters, self._reset_waiters = self._reset_waiters, []
+        for ev in waiters:
+            ev.set()
+        return True
 
     # ---------- 指令 ----------
 
@@ -240,6 +299,9 @@ async def sim_loop(rt: SimRuntime, hub: Hub) -> None:
     period = 1.0 / rt.tick_hz
     next_at = time.perf_counter()
     while True:
+        # D2：复位只在这里执行 —— 上一轮的 tick 已结束、下一轮的 mj_step 还没开始。
+        # 端点（另一个协程）只置位，所以「复位 vs tick 抢 MjData」在结构上不可能发生。
+        rt.apply_pending_reset()
         rt.tick()
         hub.publish(rt.snapshot())
         next_at += period
@@ -296,6 +358,9 @@ def create_app(runtime: SimRuntime | None = None, tick_hz: float = TICK_HZ) -> F
                 "time_to_reach_s": rt.mode.info()["ik_time_to_reach_s"],
                 "error": rt.mode.info()["ik_error"],
             },
+            # D2：复位计数（/reset 成功一次 +1）与排队中的复位请求
+            "resets": rt.reset_count,
+            "pending_reset": rt.pending_reset,
             # P2a：动作通道（mimic）的进度；不加载权重时为 None
             "mimic": {
                 "phase": rt.mode.info()["mimic_phase"],
@@ -305,6 +370,44 @@ def create_app(runtime: SimRuntime | None = None, tick_hz: float = TICK_HZ) -> F
                 "error": rt.mode.info()["mimic_error"],
             },
         }
+
+    @app.post("/reset")
+    async def reset_body() -> JSONResponse:
+        """复位：回到 keyframe stand + spawn，清 cmd / jointTargets / 模式 / ramp。
+
+        端点**只排队**（request_reset），真正的 mj_resetDataKeyframe 在 sim_loop 的
+        tick 边界执行；等到那一轮真的做完（Event 被 set）才回 {ok:true, tSim:...}。
+        所以「POST 回了 200」= 复位已经落进 MjData，不是「排上了队」。
+        """
+        done = rt.request_reset()
+        try:
+            await asyncio.wait_for(done.wait(), timeout=RESET_WAIT_MAX_S)
+        except asyncio.TimeoutError:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": f"复位 {RESET_WAIT_MAX_S:g} s 内没落到 tick 边界（物理环停了？）",
+                },
+                status_code=503,
+                headers=CORS_ANY,
+            )
+        s = rt.world.state()
+        return JSONResponse(
+            {
+                "ok": True,
+                "tSim": _r6(s["t"]),
+                "mode": rt.mode.mode,
+                "x": _r6(s["x"]),
+                "y": _r6(s["y"]),
+                "z": _r6(s["z"]),
+                "resetCount": rt.reset_count,
+            },
+            headers=CORS_ANY,
+        )
+
+    @app.options("/reset")
+    async def reset_preflight() -> JSONResponse:
+        return JSONResponse({"ok": True}, headers=CORS_ANY)
 
     @app.websocket("/sim")
     async def ws_sim(ws: WebSocket) -> None:

@@ -125,6 +125,11 @@ function fmt(v: number | null | undefined, d = 2): string {
 
 const ROOM_R = 0.26; // 机器人水平半径：与 physics.ts 的胶囊半径同量级，射线按它外扩
 const RAY_MAX = 2.6; // 射线量程（m）：太长就把整块地面画满线，反而看不出哪边是空的
+/** 摔倒线（BodyState.y = pelvis 高度）：站立 ~0.79，0.5 与 sim_server.selfcheck 的 z_min≤0.5 同一口径 */
+const FALLEN_Y = 0.5;
+/** 摔倒标记的当前值（refresh 每 0.2 s 更新；__demo.state() 也读它） */
+let fallenNow = false;
+let fellAnnounced = false;
 
 async function connectBody(): Promise<void> {
   panel.pill('ws', '连接 sim_server…', 'idle');
@@ -132,6 +137,8 @@ async function connectBody(): Promise<void> {
     try {
       body = await G1BodyWs.create(wsUrl, {
         onFallback: (why) => panel.log('WS 掉线未恢复：' + why + '（停最后一帧真实状态，不编数据）', 'warn'),
+        // 复位回执：成功/失败都打一条 sys 事件（失败已降级为只清指令，绝不静默）
+        onReset: (ok, detail) => panel.log(detail, ok ? 'hot' : 'warn'),
       });
     } catch (e) {
       panel.pill('ws', 'WS 重连中 #' + attempt, 'off');
@@ -269,9 +276,14 @@ function doAct(key: ActKey): void {
       void watchActuator('ik');
       break;
     case 'reset':
-      body?.reset(SPAWN.x, SPAWN.z);
+      if (!body) {
+        panel.log('复位：还没连上 sim_server，没有可复位的权威环', 'warn');
+        break;
+      }
+      // 真的复位：POST /reset → 服务端在物理 tick 边界重建 stand + 回到 spawn（回执见下一条）
+      body.reset(SPAWN.x, SPAWN.z);
       panel.zeroSliders();
-      panel.log('复位：只清上行指令；服务端没有 /reset，位置由权威环决定', 'warn');
+      panel.log('复位：POST /reset（服务端在 tick 边界回到 stand + spawn），等回执…', 'hot');
       break;
   }
   gate.authorize('user');
@@ -542,6 +554,18 @@ function refresh(dt: number): void {
   panel.status('fps', fmt(fps, 0));
   panel.status('drop', String(body.stats().dropped));
   panel.status('ncon', f && typeof f.contacts === 'number' ? String(f.contacts) : '—');
+
+  // 摔倒提示：服务端真值 y < 0.5（不是靠看画面猜）。状态区出现醒目条，同时打一条 sys 事件
+  // （只在状态翻转时打，不刷屏；复位站起来后自动收起并再打一条）。
+  fallenNow = !!st && st.y < FALLEN_Y;
+  panel.fallen(fallenNow);
+  if (fallenNow && !fellAnnounced) {
+    fellAnnounced = true;
+    panel.log('已摔倒 · y=' + fmt(st?.y, 3) + ' m < ' + FALLEN_Y + ' · 按「复位」回到站立', 'warn');
+  } else if (!fallenNow && fellAnnounced) {
+    fellAnnounced = false;
+    panel.log('已恢复站立 · y=' + fmt(st?.y, 3) + ' m', 'hot');
+  }
   updateGateHint();
   panel.pill('ws', body.degraded ? 'WS 断线（停最后一帧）' : 'WS ' + (body.jointNames.length || 0) + ' 关节', body.degraded ? 'off' : 'on');
 }
@@ -614,6 +638,8 @@ requestAnimationFrame((t) => {
       speed: st?.speed ?? null,
       x: st?.x ?? null,
       y: st?.y ?? null,
+      /** 摔倒标记（y < 0.5）——与状态区那条醒目提示同源 */
+      fallen: fallenNow,
       z: st?.z ?? null,
       yaw: st?.yaw ?? null,
       tSim: st?.t ?? null,
