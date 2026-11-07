@@ -67,7 +67,10 @@ const yamlFiles = []
 const walk = (dir) => {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     if (e.isDirectory()) {
-      if (['.git', 'node_modules', '.venv', 'dist', 'logs', '__pycache__'].includes(e.name)) continue
+      // .tmp：本地落地目录（下载的第三方权重/仓库配置），不是本仓库的契约。
+      // scripts/check-docs.mjs 早就跳过它；这里漏了会让"本机跑红、CI 跑绿"，
+      // 例如 .tmp/mimic/*.yaml 带 python/tuple 标签（第三方训练配置，不归我们管）。
+      if (['.git', 'node_modules', '.venv', 'dist', 'logs', '__pycache__', '.tmp'].includes(e.name)) continue
       walk(path.join(dir, e.name))
     } else if (/\.ya?ml$/i.test(e.name)) yamlFiles.push(path.join(dir, e.name))
   }
@@ -89,7 +92,10 @@ for (const f of yamlFiles) {
     bad(`${rel(f)} 解析失败: ${e.message}`)
   }
 }
-if (baselines !== 4) bad(`基线文件数应为 4，实际 ${baselines}`)
+// 期望数：四条消融（B0/B0p/B1/B2）+ 人形参照 G1-full（S3 新增，开关镜像 full 但身体是 g1）。
+// 保留"数一数"这道闸门是为了拦住"基线文件被误删"；新增基线时同步改这里，不允许悄悄多一个。
+const EXPECTED_BASELINES = 5
+if (baselines !== EXPECTED_BASELINES) bad(`基线文件数应为 ${EXPECTED_BASELINES}，实际 ${baselines}`)
 
 // ---------- 3) Issue 模板结构
 console.log('== Issue 模板 ==')

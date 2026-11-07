@@ -42,6 +42,7 @@ sim/.venv/Scripts/python -m sim.main --llm-disconnect 3   # 3 秒切断 LLM，�
 sim/.venv/Scripts/python -m sim.main --baseline b2        # 关掉 L1 抢占（对照）
 sim/.venv/Scripts/python -m sim.main --clearance-mode analytic   # 对照：解析式感知
 sim/.venv/Scripts/python -m sim.main --body g1 --duration 30     # 换人形 G1（G1World），L1–L4 不改
+sim/.venv/Scripts/python -m sim.main --body g1 --baseline g1-full --duration 30 --no-render   # 人形基线（n>=5 报分布）
 sim/.venv/Scripts/python -m sim.main --scene dyn                 # 胶囊 + mocap 干扰体（DynWorld）
 sim/.venv/Scripts/python -m sim.main --body g1 --scene dyn       # exit 2：不兼容，不静默降级
 sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈值
@@ -127,6 +128,20 @@ G1 的房间来自 `g1.xml` + `scene_room.json`，没有会动的东西）。`--
 **一个必须知道的数值性质**：30 s 步行对初始坐标**浮点敏感**——只把出生点挪 1e-9 m，`walk_30s` 就从 0.5711 变成 0.5752 m/s。
 同一初始点连跑两次仍逐位相同（已验证），所以它是确定性的、但不是"抗扰动"的。这意味着：**基线里的 30 s 步行数字必须报 n≥5 的分布**，
 不能拿单次数值跟别的版本逐位对比，更不能因为差 0.002 m/s 就说"性能变了"。
+### S3：`g1-full` 基线（2026-11-08）
+
+`--baseline g1-full` 是**人形上的「什么也不关」**：开关与 `full` 逐项相同，区别有两个——
+它带 yaml（[evals/baselines/g1-full.yaml](../evals/baselines/g1-full.yaml)，有 sha256 可核对），
+且声明 `body: g1`；于是**拿胶囊跑它会 exit 2**（不静默降级），而历史用法
+`--body g1 --baseline full` 不受影响（那些基线不声明 body）。为什么不直接改 `full`、
+为什么 n≥5 要分两段口径，见 [ADR-0008](../docs/adr/0008-g1-full-baseline.md)。
+
+G1 摘要新增一行「净位移」：起点到终点的**直线距离**，不是路径长。人形 30 s 里约一半时间站在
+「桩位」上不动，拿「平均速度 × 时长」当位移会把站着不动算成走过路。这行只对 `--body g1` 打印，
+胶囊路径的输出一个字没变。
+
+实测 n=5（seed 7–11，含逐次值与日志 sha256）：[evals/g1-full/README.md](../evals/g1-full/README.md)；
+口径：[docs/evaluation.md](../docs/evaluation.md) 的「G1-full」一节。
 ## 基线：full 是主张，四条 yaml 是消融
 
 `sim` 的开关**从 `evals/baselines/*.yaml` 读**（`sim/baseline.py`），代码里不再另抄一份。

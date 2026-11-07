@@ -24,6 +24,9 @@ FILES = {
     "b0p": "b0p-behavior-tree.yaml",
     "b1": "b1-no-affect.yaml",
     "b2": "b2-no-preemption.yaml",
+    # g1-full：开关镜像 full，但跑在人形 G1 上，所以它必须是 yaml（有文件才有 sha256 可核对）。
+    # 它**不是**第五条消融基线：它什么也不关，是"换身体的参照配置"。
+    "g1-full": "g1-full.yaml",
 }
 
 
@@ -42,6 +45,21 @@ def path_for(baseline: str) -> Path:
     if not p.exists():
         raise SystemExit(f"基线文件不存在：{p}（本模块不做静默降级）")
     return p
+
+
+def declared_body(baseline: str) -> str:
+    """yaml 里显式声明的身体（`body:` 键）；没声明就返回 ""，表示"不约束"。
+
+    为什么要有这个函数：`g1-full` 的开关和 `full` 逐项相同，唯一区别是底下的物理
+    （29-DOF 人形 vs 平面底盘）。如果允许拿胶囊跑 `g1-full`，同一份日志标签下就会躺着
+    两副身体的数——这正是"历史可比性"被破坏的方式。所以在 main.py 里做硬闸门（exit 2）。
+
+    反过来，历史用法 `--body g1 --baseline full`（S2 的跑法）必须继续有效：
+    `full` 与 b0/b0p/b1/b2 都没声明 body，这里返回 ""，一律不拦。
+    """
+    if is_full(baseline):
+        return ""
+    return str(load(baseline).get("body") or "")
 
 
 def load(baseline: str) -> dict:

@@ -7,6 +7,7 @@
 换身体 / 换场景（S2）：
 
     python -m sim.main --body g1 --baseline full --duration 30   # 人形 G1，同一套 L1–L4
+    python -m sim.main --body g1 --baseline g1-full --duration 30 --no-render  # 人形基线（n>=5 报分布）
     python -m sim.main --scene dyn                              # 胶囊 + mocap 干扰体（DynWorld）
 
 设计上刻意让"第一次规划撞墙"：这样 L2 的否决与 L4 的重规划是**必然发生**的，
@@ -37,6 +38,7 @@ import sys
 import time
 from pathlib import Path
 
+from . import baseline as baseline_mod
 from . import config as C
 from .bus import SignalBus
 from .contracts import EventLog, now_ms
@@ -109,8 +111,9 @@ def _git_commit() -> str:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="EA Stack · 阶段 1 最小闭环")
     ap.add_argument("--baseline", default="full",
-                    choices=["full", "b0", "b0p", "b1", "b2"],
-                    help="full=本系统全开；b0/b0p/b1/b2=四条消融基线")
+                    choices=["full", "g1-full", "b0", "b0p", "b1", "b2"],
+                    help="full=本系统全开；g1-full=同一套开关跑在人形 G1 上（yaml 基线，"
+                         "声明 body=g1，数字不可与胶囊直接比）；b0/b0p/b1/b2=四条消融基线")
     ap.add_argument("--body", default="capsule", choices=list(BODY_CHOICES),
                     help="capsule=平面底盘（历史基线可比，默认）；"
                          "g1=Unitree G1 人形（G1World，L1–L4 一个字不改）")
@@ -151,6 +154,19 @@ def main(argv: list[str] | None = None) -> int:
         import json as _json
         print(_json.dumps(cfg.summary(), ensure_ascii=False, indent=2))
         return 0
+
+    # 基线可以声明自己属于哪副身体（yaml 的 body 键）。声明了就必须对得上：
+    # g1-full 的开关与 full 逐项相同，区别只在底下的物理——拿胶囊跑出来却挂 G1-full 的标签，
+    # 等于把两副身体的数写进同一条曲线。历史用法（--body g1 --baseline full，S2 的跑法）
+    # 的基线没声明 body，declared_body 返回 ""，这里不拦，行为一个字不变。
+    declared = baseline_mod.declared_body(args.baseline)
+    if declared and declared != args.body:
+        print(f"[exit 2] --baseline {args.baseline} 声明 body={declared}，"
+              f"与 --body {args.body} 不一致", file=sys.stderr)
+        print(f"  - 这条基线的数字只在 {declared} 身体上成立；换身体跑出来的数不可比"
+              f"（见 docs/adr/0008-g1-full-baseline.md）。", file=sys.stderr)
+        print(f"  - 要在人形上跑：--body {declared} --baseline {args.baseline}", file=sys.stderr)
+        return 2
 
     t0 = time.perf_counter()
     meta = {
@@ -195,6 +211,9 @@ def main(argv: list[str] | None = None) -> int:
         fell_z = 0.0
     is_g1 = args.body == "g1"
     is_dyn = args.scene == "dyn"
+    # 净位移的起点（只在 G1 摘要里打，胶囊输出一个字不变）：出生点由 scene_room.json /
+    # scene.xml 决定，这里不写死坐标，免得哪天改出生点时偷偷变成"两处事实源"。
+    pos_start = (float(world.pos[0]), float(world.pos[1]))
 
     # L2 的"推底盘"逃生通道只存在于胶囊身体（world.py 用 xfrc_applied 推一个平面底盘）。
     # 人形没有这个通道（g1_world.py 第 2 条：push 被忽略并计数），于是
@@ -405,6 +424,10 @@ def main(argv: list[str] | None = None) -> int:
             print("\033[H" + frame, flush=True)
 
     # ------------------------------------------------------------ 收尾
+    pos_end = (float(world.pos[0]), float(world.pos[1]))
+    # 净位移（直线距离），不是路径长：人形 30 s 里有很长一段时间站在"桩位"上不动，
+    # 路径长 ≈ 平均速度 × 时长这种换算会把"站着不动"算成"走过路"，所以分开报。
+    disp = math.hypot(pos_end[0] - pos_start[0], pos_end[1] - pos_start[1])
     log.write(clock(), "SIM", "summary", "final",
               value=round(l1.battery, 1),
               detail=f"decisions={l4.decisions} aborts={l4.aborts} overrides={l2.overrides}")
@@ -463,6 +486,8 @@ def main(argv: list[str] | None = None) -> int:
               f"  degraded={'YES' if l4.degraded else 'no'}")
         print(f"摔倒（z_min）   z_min={z_min:.4f} m  {'<=' if fell else '>'} FELL_Z={fell_z:.2f} m"
               f"  -> {'摔了' if fell else '未摔'}")
+        print(f"净位移          {disp:.3f} m  (起点 {pos_start[0]:+.2f},{pos_start[1]:+.2f}"
+              f" → 终点 {pos_end[0]:+.2f},{pos_end[1]:+.2f}；直线距离，不是路径长)")
         print(f"contacts 最大   contact_force_max={contact_max:.2f} N   ncon_max={ncon_max} 对")
         if charging_ticks:
             print(f"charging 周期   {charging_ticks} 个控制周期（{charging_ticks / C.CONTROL_HZ:.2f}s"

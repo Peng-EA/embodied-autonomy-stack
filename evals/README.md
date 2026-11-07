@@ -5,17 +5,23 @@
 这里放的是**基线的机器可读定义**。`sim/` 直接读这些 yaml（`sim/baseline.py`），
 不再在代码里另抄一份开关——改 yaml 立即生效，改代码不会生效。
 
-## 四条基线（都是消融）
+## 基线一览
 
-| 文件 | 编号 | 一句话 | 关掉了什么 |
-|---|---|---|---|
-| [`b0-llm-central.yaml`](baselines/b0-llm-central.yaml) | B0 | 所有行为决策经 LLM，断线即停 | L1 / L2 / L3 |
-| [`b0p-behavior-tree.yaml`](baselines/b0p-behavior-tree.yaml) | B0′ | 传统行为树，不依赖 LLM | L1 / L3（只留 L2 + L4 脚本航点） |
-| [`b1-no-affect.yaml`](baselines/b1-no-affect.yaml) | B1 | 保留 L1/L2/L4，移除 L3 调制 | 情绪对行为的调制 |
-| [`b2-no-preemption.yaml`](baselines/b2-no-preemption.yaml) | B2 | 保留需求生成，移除 L1 抢占 | 抢占 |
+| 文件 | 编号 | 身体 | 一句话 | 关掉了什么 |
+|---|---|---|---|---|
+| [`b0-llm-central.yaml`](baselines/b0-llm-central.yaml) | B0 | 胶囊 | 所有行为决策经 LLM，断线即停 | L1 / L2 / L3 |
+| [`b0p-behavior-tree.yaml`](baselines/b0p-behavior-tree.yaml) | B0′ | 胶囊 | 传统行为树，不依赖 LLM | L1 / L3（只留 L2 + L4 脚本航点） |
+| [`b1-no-affect.yaml`](baselines/b1-no-affect.yaml) | B1 | 胶囊 | 保留 L1/L2/L4，移除 L3 调制 | 情绪对行为的调制 |
+| [`b2-no-preemption.yaml`](baselines/b2-no-preemption.yaml) | B2 | 胶囊 | 保留需求生成，移除 L1 抢占 | 抢占 |
+| [`g1-full.yaml`](baselines/g1-full.yaml) | G1-full | **G1 人形** | 人形上的"什么也不关" | 什么也没关（**换的是身体**） |
 
 > **`full` 不是 yaml 基线**：它是"什么也不关"的本系统配置，定义在 `sim/baseline.py`。
 > 要比较"情绪有没有用"，正确对照是 `full` vs `B1`（不是 B1 vs B0′）。
+
+> **`g1-full` 不是第五条消融**：开关逐项镜像 `full`，唯一的区别是身体（Unitree G1，29-DOF）。
+> **它的数字不可与胶囊基线直接比**——出生点、`drive_toward` 的物理含义、有没有推底盘通道、
+> 房间里有没有充电桩，全都不一样。口径、跑法与 n=5 分布见 [`g1-full/README.md`](g1-full/README.md)，
+> 为什么另立一档而不是改 `full` 见 [ADR-0008](../docs/adr/0008-g1-full-baseline.md)。
 
 ## 怎么跑
 
@@ -37,6 +43,7 @@ sim/.venv/Scripts/python -m sim.main --baseline b2 --duration 10 --no-render
 | `preemption.enabled` | L1 是否能抢占 | `RunConfig.preemption_enabled` |
 | `need_generation.enabled` | 是否生成需求信号 | `RunConfig.need_generation` |
 | `llm.required` | 是否强依赖 LLM | 记录用（当前不改变行为） |
+| `body` | 该基线声明的身体（缺省＝不声明＝不约束）。声明了就必须与 `--body` 一致，否则 exit 2 | `sim/baseline.py` 的 `declared_body()` |
 | `metrics` | 需要采集的指标 id（见 [metrics.md](metrics.md)） | 记录用 |
 | `expectations` | **预期方向**（不是数值） | 对照表 |
 

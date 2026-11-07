@@ -11,6 +11,16 @@
 
 ### Added
 
+- **人形基线 `g1-full` + ADR-0008（S3）**：新增 [`evals/baselines/g1-full.yaml`](evals/baselines/g1-full.yaml)——开关逐项镜像
+  `full`，但声明 `body: g1`，所以它是**人形参照配置**而不是第五条消融；`sim/baseline.py` 注册该 id 并加
+  `declared_body()`，`sim/main.py` 对「基线声明的身体 ≠ `--body`」直接 exit 2（不静默降级；历史用法
+  `--body g1 --baseline full` 不受影响）。G1 摘要新增「净位移」一行（直线距离，非路径长；胶囊输出未变）。
+  实测（2026-11-08，30 s，`--no-render`）：**同条件连跑 5 次日志 sha256 全同**（`b8892a10…`）——
+  逐位相同，所以单次数字不代表分布；**跨 seed（7–11）n=5**：平均速度 **0.2178 ± 0.0051 m/s**（0.2120–0.2230）、
+  净位移 **3.139 ± 0.039 m**（3.073–3.172）、`z_min` **0.7122 ± 0.0017 m**（不摔，判摔线 0.50）、
+  L2 否决 1/1、L4 决策 2.2（2–3）。三处语义不成立照写 TBD（`L1.charging` 房间无桩 / `L3.hold_charge` /
+  `L2.push` 无推通道→走速度层，本次 `push_ignored=0` 说明推力通路未被测到）。**身体不同，不可与胶囊数字直接比**；
+  `checks/validate-contracts.mjs` 的基线期望数 4 → 5。历史四条 yaml 一个字节未改。
 - **抓取能力：mink IK（P3）**：新增 `sim_server/ik.py`（`mink.Configuration` + `FrameTask(right_wrist_yaw_link)` + `PostureTask`
   + `DofFreezingTask` 冻住基座与腿），`modes.py` 加第四模式 `IK`（settle 0.10 s → 解 → 交 kp=500 位置执行器 → 闭环保持 1 s → RAMP 退场，
   与 POLICY/MIMIC 互斥）。依赖链 mink 1.4.0 / qpsolvers 4.13 / scipy 1.18.1 / osqp（scipy 走默认源必断，用 aliyun 镜像 24 s）。

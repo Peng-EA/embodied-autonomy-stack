@@ -1,0 +1,57 @@
+# 基线 G1-full：人形 Unitree G1 上的「什么也不关」
+#
+# 开关**镜像** `full`（本系统全开，定义在 `sim/baseline.py` 的 `derive()` 里）。
+# 唯一的区别是它带了 yaml 文件：有文件就有 sha256，日志 meta 里能核对"我跑的是哪一版"，
+# 而 `full` 是内置常量、`baseline_sha256` 只能打 n/a。
+#
+# ⚠ **身体不同，不可与胶囊（capsule）的数字直接比。**
+#   同一套 L1–L4 一行没改，底下换的是物理：29-DOF 人形 vs 平面底盘。
+#   出生点、`drive_toward` 的物理含义（推力 N vs 命令速度 m/s）、有没有"推底盘"通道、
+#   房间里有没有充电桩——全都不一样。跨身体只能比"机制是否生效"，不能比"性能谁高"。
+#   理由与代价见 `docs/adr/0008-g1-full-baseline.md`。
+#
+# ⚠ **不可与其他身体混算分布**：30 s 步行对初始坐标浮点敏感（出生点挪 1e-9 m，
+#   `walk_30s` 从 0.5711 变 0.5752 m/s），所以本基线的数字一律报 n>=5 的分布，
+#   不报单次值，也不与胶囊基线的单次值逐位对比。
+#
+# 三处**语义不成立**（照写 TBD，不伪造信号）：
+#   1. L1.charging —— 房间没有充电桩；靠近 `C.CHARGER_POS` 那个地面点就被判成"在充电"
+#   2. L3.hold_charge —— 由上面那条生出来的动机，同理（没有桩就没有"保持充电"这件事）
+#   3. L2.push —— 人形没有"推底盘"通道（G1World 忽略 push 并计 `push_ignored`）；
+#      逃生改走速度层（`sim/main.py` 按能力分叉，L2 判定与阈值未改）
+
+id: G1-full
+name: G1 full system (humanoid)
+description: 人形 G1 上的本系统全开配置（开关镜像 full；身体是 g1，不是胶囊，数字不可跨身体比）
+
+# 本基线声明的身体。sim/main.py 用它拒绝"拿胶囊跑 g1-full"（exit 2，不静默降级）。
+body: g1
+
+layers:
+  l1_homeostasis: enabled
+  l2_reflex: enabled
+  l3_affect: enabled
+  l4_planning: enabled
+  perception: enabled
+
+preemption:
+  enabled: true
+
+need_generation:
+  enabled: true
+
+llm:
+  required: true
+
+metrics:
+  - llm_disconnect_survival
+  - need_driven_behavior_ratio
+  - affect_modulation_significance
+  - anomaly_recovery_rate
+  - preemption_precision
+  - development_curve
+
+expectations:
+  # 参照配置：它本身就是被消融对照的那一档，所以这里**不设预期方向**。
+  # 谁想给 G1 定目标值，得先有 n>=5 的分布（见 docs/evaluation.md 的 G1-full 一节）。
+  reference: self
