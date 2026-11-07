@@ -14,7 +14,7 @@ G1 joystick 策略。两套机构各管一段，**谁都不许冒充对方**。
 | 一个能跑 30 s 不摔、位置可复现的 MuJoCo 世界（`mj_step` 2 ms） | **不是自研步态**：走路用的是别人的权重（来源见 §2b），我们没有训练，也没有改 obs |
 | **HOLD**：29 个位置执行器钉在 keyframe `stand`，kp=500 临界阻尼；30 s 实测漂 0.2 mm | **不是平衡控制器**：HOLD 没有抗扰能力，推一把就倒 |
 | **POLICY**：G1 joystick ONNX 速度跟踪，kp=75/kd=2；cmd (0.5,0,0) 实测 0.55 m/s、30 s 不摔 | **不是抓取**：IK 只把**腕关节**送到点（位置任务），没有手部闭合、没有抓取力 |
-| **IK**：mink（QP 差分 IK，osqp）把右腕送到 `scene.json` 的取杯点，交位置执行器执行；末端误差实测 4.54 mm | **不是自研 IK**：阻尼最小二乘 / 手写雅可比一行都没有，解算只有 `mink.solve_ik` |
+| **IK**：mink（QP 差分 IK，osqp）把右腕送到 `sim/env/scene_room.json` 的取杯点，交位置执行器执行；末端误差实测 4.54 mm | **不是自研 IK**：阻尼最小二乘 / 手写雅可比一行都没有，解算只有 `mink.solve_ik` |
 | WS `/sim` 状态流：P2b **追加** `mode` 键（body.ts 契约字段一个没动） | 不是渲染器：three 场景、鲸鱼娘、UI 一律没动（`testbed/` 零改动） |
 
 **站得住 ≠ 策略能站**，这两件事必须分开记：
@@ -86,6 +86,9 @@ server/.venv/Scripts/python.exe -m sim_server.app --port 8788
 
 # ③ 健康检查
 curl http://127.0.0.1:8788/health
+
+# ④ 分层护栏（不连仿真、不装依赖，纯静态）：sim/**/*.py 里不许 import sim_server
+node scripts/check-layer-deps.mjs
 ```
 
 `selfcheck` 的退出码：0 = 全达标；1 = 有不达标项（`FAIL: ...` 打到 stderr，
@@ -183,7 +186,7 @@ MIMIC 与 POLICY 互斥：给速度命令会先退场再交给 POLICY。
 | **腿冻住、腰放开**（3 个自由度） | 脚不动 = 站姿不变，不靠"往前栽"骗距离；腰转一点是人伸手时的自然补偿，也让机器人不必贴死在桌沿上 |
 | **只约束位置，不约束朝向**（`orientation_cost=0`） | P3 判据是末端**位置**误差；抓取姿态（上方抓 / 侧面抓）还没定论，硬塞朝向目标只会把位置解拖偏。这是已知边界，不是"已经会抓杯子" |
 
-**目标点**：`scene.json` 的 `ik_targets` 段（`desk_cup`，桌沿取杯点，坐标写在 stored 系）。
+**目标点**：`sim/env/scene_room.json` 的 `ik_targets` 段（`desk_cup`，桌沿取杯点，坐标写在 stored 系）。
 为什么不是任务书举例的**矮桌**（low_table，顶面 0.32 m）：直立 G1 的右腕自肩可达半径实测
 **0.361–0.381 m**（`--ik` 会打印），肩在 1.08 m，矮桌杯面低 0.76 m —— **够不着**。这是负结果，
 不改判据、也不把机器人按低。桌（desk）顶面 0.72 m 时腕要到 0.85 m（杯高 0.13，抓杯沿/杯身上部），
@@ -205,7 +208,7 @@ left_knee 推过限位 2e-3 rad 后 QP infeasible），兜底是当步退成"只
 （`fallback_no_limits`），限位仍由执行器 ctrlrange 截断 + selfcheck 的越限计数负责。
 
 **测试站位**（布置，不是判据）：目标家具前缘外 `IK_STAND_GAP_M=0.21 m`、正对 +y、x 取目标点 x
-（站位从 `scene.json` 推，写死不下来的坐标）。实测 by=1.83–1.85 这一段末端误差 4.4–4.7 mm；
+（站位从 `sim/env/scene_room.json` 推，写死不下来的坐标）。实测 by=1.83–1.85 这一段末端误差 4.4–4.7 mm；
 再近（1.86）跳到 9.5 mm，再近（≥1.88）脚顶住桌子直接摔。
 
 **实测（`--ik`，2026-11-08，本机，n=1，CPU 单线程；同一命令复跑两次末端误差与到位耗时逐位相同）**：
@@ -379,11 +382,25 @@ Python 侧不另写一遍力矩。
 | `app.py` | FastAPI + WS `/sim` + `/health`；定步长循环只 `publish` 最新快照（**不做 WS I/O**），每客户端一条独立发送协程按 seq 取最新（慢客户端合并中间帧，不阻塞物理） |
 | `selfcheck.py` | headless 跑 N 秒，打印四行指标（`--walk` 打 P2b 六项 / `--mimic` 七项 / `--ik` 五项），exit code 0/1 |
 | `ik.py` | **IK 的解算封装**：`mink.Configuration` + `FrameTask(right_wrist_yaw_link)` + `PostureTask`（回 stand）、等约束冻基座/腿、`frame→关节角`、`actuator_targets`（按关节名映射，不按下标猜）。**不自研 IK** |
-| `scene.json` | 场景单一真源：`boxes`（= physics.ts，parity 脚本逐条比）+ **P3 的 `ik_targets`**（取杯点；坐标写 stored 系，换算在 `scene.py`） |
+| `scene.py` | 读场景单一真源 **`../sim/env/scene_room.json`**（`boxes` = physics.ts，parity 脚本逐条比 + **P3 的 `ik_targets`**，坐标写 stored 系），做 stored→mj 换算；默认路径由 `__file__` 推出仓库根（不看 cwd），显式 `load_scene(path=...)` 仍可换一份 |
 | `modes.py` | **HOLD/POLICY 状态机**：滞回判据、0.2 s ramp（目标 + kp + kd）、回 HOLD 前的刹车；所有 `ctrl` 都从这里出 |
 | `policies/g1_joystick.py` | ONNX 推理封装：103 维 obs 组装（照训练端）、50 Hz 控制、动作→29 个位置目标、权重 md5 校验 |
 | `policies/g1_mimic.py` | **MIMIC 的动作源**：`CLIPS` 注册表（clip / 字节数 / sha256 / 帧数）、154 维 obs 组装、每控制帧两调推理、参考帧数二分探出、动作→29 个位置目标 |
 | `policies/SPIKE.md` | 2026-11-07 的选型探路记录：为什么是这个权重、kp=500 必摔、零命令站不住（含实测表） |
+
+**场景真源在 `sim/env/scene_room.json`（2026-11-08 搬家，S0；本目录不再有 JSON）**：`sim/`
+（Python 评价体系）在依赖上更底层，接下来也要读同一份房间，所以 JSON 归底座目录，本包往上读它。
+搬家只动了路径与引用，场景数值一个字节没改（搬迁前后 sha256 相同），`--seconds 5` / `--collide`
+/ `--ik` 的自检数字逐位不变。依赖方向由一条机械命令守住（不是靠自觉）：
+
+```bash
+node scripts/check-layer-deps.mjs   # sim/**/*.py 里出现 import/from sim_server 即 exit 1（注释与字符串不算）
+node scripts/check-scene-parity.mjs # 读的就是 sim/env/scene_room.json，22 项逐位比 physics.ts
+```
+
+改场景的规矩不变：只许改 `testbed/src/console/physics.ts` → 再同步 `sim/env/scene_room.json` →
+两条命令都绿。`sim/` 里要读房间，用 `sim_server.scene` 之外的方式（`json.load` + 同一个换算公式），
+**不许反向 import**；护栏红了就说明有人把依赖方向写倒了。
 
 ## 7. 已知边界 / TBD（诚实清单）
 
@@ -402,7 +419,7 @@ Python 侧不另写一遍力矩。
 4. **仿真时间比墙钟慢 0.96 倍**：每 tick 固定 8×2 ms = 0.016 s 仿真，但按 60 Hz（1/60 s）配速，
    所以 30 s 仿真要 31.3 s 墙钟。要 1:1 就把 `--hz` 设 62.5（`SIM_HZ`）。
    （`--walk` 不配速，它量的是仿真真值与时延分布，不是实时性。）
-5. **只有地板**：没有家具、没有房间盒子、没有撞墙。P1 用 `scene.json` 生成。
+5. **只有地板**：没有家具、没有房间盒子、没有撞墙。P1 用 `sim/env/scene_room.json` 生成。
 6. **往返延迟没测**：P0 计划里的「P95 ≤15 ms」本次**没测**（浏览器客户端还没接，
    只有本机 WS 回环）。TBD：谁接 `g1-body.ts` 的 WS 客户端谁测，用同一台机器。
 7. **sim2sim 的物理差没逐项对**：训练端 MJCF 的 armature（0.0102/0.0251）、frictionloss（0.1）、

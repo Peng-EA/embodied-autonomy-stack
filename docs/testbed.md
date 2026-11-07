@@ -222,7 +222,10 @@ obs 逐行照 `play_g1_joystick.py` + `joystick.py:_get_obs`：103 维（含 3 �
 
 **边界**：该策略**没有静止模式**（cmd=0 跑 5 s 漂 0.387 m，静止只能靠 HOLD）；把增益换回 MJCF 原样
 kp=500 会 4 s 倒地（训练假设是 kp=75/kd=2）；侧移、推扰、60 s 连续、`unitree_rl_mjlab` 的导出 onnx 均**未测（TBD）**。
-### 场景单一真源与碰撞（P1 · `sim_server/scene.json`）
+### 场景单一真源与碰撞（P1 · `sim/env/scene_room.json`）
+
+场景真源在 **`sim/env/scene_room.json`**（2026-11-08 从 `sim_server/` 搬过去，为了让 `sim/` 这个更底层的评价体系也能读同一份，
+且不允许 `sim/` 反向依赖 `sim_server/`——`node scripts/check-layer-deps.mjs` 守着这条）。
 
 家具不再手写两份：9 条结构（地板 / 后墙 / 左墙 / 桌 / 床 / 凳 / 矮桌 / 边几 / 植物盆）的名字、中心、半长
 逐位抄自 `testbed/src/console/physics.ts` 的 `fixed(...)`，`node scripts/check-scene-parity.mjs` 双向比对

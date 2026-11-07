@@ -32,7 +32,7 @@
      server/.venv/Scripts/python.exe -m sim_server.selfcheck --collide --seconds 8
      输出：blocked_at / blocked_frames / penetration / fell / went_m / hit_at
    达标（任务书原文）：blocked_frames ≤10；blocked_at > 0；penetration ≥ -0.02 m；fell=False。
-   几何全部来自 sim_server/scene.json（= physics.ts 的同一份中心/半长），本文件不写坐标。
+   几何全部来自 sim/env/scene_room.json（= physics.ts 的同一份中心/半长），本文件不写坐标。
    出生点离桌子正面的 2.0 m 是**测试布置**不是判据：它只决定「撞上发生在第几秒」。
 
 5) P3 --ik：右手到 scene.json 的取杯点（desk_cup）。HOLD 站定 → mink 解（预算 2 s，收敛即停）

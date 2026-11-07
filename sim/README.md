@@ -49,6 +49,7 @@ sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈�
 | 路径 | 职责 |
 |---|---|
 | `env/scene.xml` | 场景：平面底盘、横在中间的墙、充电桩（只做视觉，不参与碰撞） |
+| `env/scene_room.json` | **房间场景的单一真源**（2026-11-08 从 `sim_server/` 搬来）：9 件家具的名字/中心/半长（逐位抄自 `testbed/src/console/physics.ts`）、胶囊代理、出生点、`ik_targets`。`sim_server` 与 `sim` 都读这一份；`node scripts/check-scene-parity.mjs` 双向比对 22 项，`node scripts/check-layer-deps.mjs` 禁止 `sim/**` 反向 import `sim_server` |
 | `env/world.py` | 仿真器包装：位姿/速度/**raycast 感知**/接触力；换真机只改这一层 |
 | `l1_homeostasis/` | 电量/温度/应力 → `homeostatic_broadcast`（20Hz 采样） |
 | `l2_reflex/` | 射线间隙/接触力 → `reflex_override`（迟滞 + 冷却），**无许可、直接置位** |

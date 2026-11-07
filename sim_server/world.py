@@ -19,8 +19,9 @@ room.xml 与 scene.xml 都用同一行补地面
 （<geom name="floor" type="plane" size="0 0 0.05"/>，见 room.xml 第 4 行），
 这里用 MjSpec 补一模一样的一行，参数一个不改。
 
-场景几何：家具/墙**不在本文件里手写**，一律从 sim_server/scene.json 读（数值逐位抄自
-testbed/src/console/physics.ts 的 fixed(...)，由 scripts/check-scene-parity.mjs 机械比对）。
+场景几何：家具/墙**不在本文件里手写**，一律从底座目录的 sim/env/scene_room.json 读（数值逐位抄自
+testbed/src/console/physics.ts 的 fixed(...)，由 scripts/check-scene-parity.mjs 机械比对；
+JSON 为什么在 sim/env/ 而不是本目录：sim/ 更底层也要读同一份房间，方向只能 sim_server -> sim/env）。
 每个条目 = worldbody 里一个 `scene_<id>` 的 box geom（MjSpec 加的，g1.xml 一个字节没改），
 所以「会不会撞上桌子」不再取决于谁记得在 Python 里再写一遍坐标——只有一份。
 
