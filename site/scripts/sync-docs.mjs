@@ -44,6 +44,7 @@ const RAW_TARGETS = [
   ['../site/', `${BLOB}/site`],
   ['../sim/', `${BLOB}/sim`],
   ['../testbed/', `${BLOB}/testbed`],
+  ['../server/', `${BLOB}/server`],
   ['../evals/v0.2/', `${BLOB}/evals/v0.2`],
   ['../CONTRIBUTING.md', `${BLOB}/CONTRIBUTING.md`],
   ['../CODE_OF_CONDUCT.md', `${BLOB}/CODE_OF_CONDUCT.md`],
