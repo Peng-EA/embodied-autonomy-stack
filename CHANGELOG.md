@@ -11,6 +11,12 @@
 
 ### Added
 
+- **服务端权威仿真 `sim_server/`（G1 · P0a）**：MuJoCo 4.0.0 跑在 Python（2 ms 定步长、60 Hz 状态流、
+  WS `/sim` @8788），浏览器退回客户端（`?sim=wasm` 保留离线档）。站立实现为 *pose hold*
+  （keyframe `stand` 目标 + 位置执行器 PD，kp=500、kd 由 `dampratio="1"` 编译折算），
+  **没有步态、没有平衡**——命令速度不产生位移，`blocked` 恒为 true 是"想走走不动"而非撞墙。
+  实测（n=1）：模型高 1.3222 m、30 s 漂移 0.0002 m、60.0 Hz、无 NaN；1.5 m 自由下落到 0.792 m 静止（8 接触点）。
+
 - **双身体契约 + G1（MuJoCo 29-DOF）进演示台**（`testbed/src/console/`）：
   `body.ts` 定义 `BodyCommand` / `BodyState` / `Body`，胶囊（Rapier）与 G1（MuJoCo WASM）实现同一份接口；
   L1 内感受 / L3 调制 / L4 规划 / 遥测 / 遇障判定只读 `BodyState`。右上角「身体」按钮现场切换，

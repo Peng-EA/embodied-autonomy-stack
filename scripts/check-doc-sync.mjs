@@ -102,6 +102,12 @@ const RULES = [
     why: "L4 的契约与降级行为写在这两份里",
   },
   {
+    id: "sim-server",
+    paths: [/^sim_server\//],
+    need: ["sim_server/README.md", "docs/testbed.md"],
+    why: "服务端仿真的端口/协议/降级写在 sim_server/README.md 与 docs/testbed.md",
+  },
+  {
     id: "ci",
     paths: [/^\.github\/workflows\//],
     need: ["CONTRIBUTING.md", "AGENTS.md"],

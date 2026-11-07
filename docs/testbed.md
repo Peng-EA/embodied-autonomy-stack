@@ -122,6 +122,37 @@ L3 情绪（只改偏好）
 升级路径：Rapier 胶囊体接入（人走物理、视觉跟胶囊）；
 换角色改 `MMDLoader().load(...)` 或 `gltfLoader.load(...)` 的路径即可。
 
+## 服务端仿真（`sim_server/`）
+
+G1 的 MuJoCo 仿真搬到 Python 权威环（`docs/plan-g1-gait-ik-collision.md` 的 P0）。浏览器从现在起是**客户端**：
+`?sim=wasm` 仍跑浏览器内那一版（离线演示，无需 Python），默认走 WS。
+
+| 项 | 值 |
+|---|---|
+| 端点 | `ws://127.0.0.1:8788/sim`，另有 `GET /health`（8787 已被 `server/` 的 L4 占用） |
+| 物理 | `mujoco` 4.0.0，`timestep` 2 ms，每 tick 8 步 = 16 ms 仿真，60 Hz |
+| C→S | `{"t":<client_ts>,"cmd":{"vx","vz","yaw"},"jointTargets":<关节目标 或 null>}` |
+| S→C | `{"tSim","x","y","z","yaw","speed","blocked","joints","geom":{"xpos","xmat"},"contacts"}`（键与 `body.ts` 的 `BodyState` 一一对应，three 右手系） |
+| 场景 | `testbed/public/mujoco/g1/g1.xml` + 按 `room.xml` 同参数补的 floor（`g1.xml` 本身没有地面，不补会 `ncon=0`、机身掉到 z=−4414） |
+| 行 | `python -m sim_server.app`（服务）· `python -m sim_server.selfcheck --seconds 30`（自检，达标才 exit 0） |
+
+**站立是 pose hold，不是步态。** 目标取 keyframe `stand` 的 `key_ctrl`（实测等于 `qpos[7:]`），
+kp=500 读自 `g1.xml` 的 `kp="500"`，kd=4.54–16.20 由 `dampratio="1"` 编译折算后读 `biasprm`——没有一个手填增益。
+因此**命令速度不产生位移**，`blocked` 恒为 true 是"想走走不动"（不是撞墙）；走路要等 P2b 的真 loco 权重。
+
+**实测（2026-11-07 · 本机 · n=1 · `--seconds 30`）**
+
+| 指标 | 实测 | 判据 |
+|---|---|---|
+| 模型高（`stand` 姿态下全部 mesh 顶点最高点） | 1.3222 m（全程 1.3206–1.3222） | 1.34 ± 0.02（下界 1.32，贴边过） |
+| 30 s 站立漂移（骨盆水平位移） | 0.0002 m | ≤ 0.05 m |
+| 等效 tick | 60.0 Hz（1876 tick / 31.27 s 墙钟） | ≥ 55 Hz |
+| NaN | False | False |
+| 自由下落 | 抬到 1.5 m 松手 → 0.792 m 静止，8 个接触点 | 证明重力/接触是真的，不是运动学回放 |
+
+与浏览器 wasm 版记录的 1.34 m 差 1.8 cm：两处量法不同（这里是 `stand` 姿态下 mesh 顶点最高点），
+是否为姿态下沉**未排查（TBD）**。仿真/墙钟 = 0.96×（30.02 s 仿真用了 31.27 s），`--hz 62.5` 可压到 1:1。
+往返延迟 P95 与 "60 s 无丢帧" **TBD**：浏览器客户端未接（P0b）。
 ## 设计（三层，各管一件事）
 
 | 层 | 位置 | 频率 | 职责 |

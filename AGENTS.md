@@ -38,6 +38,7 @@ python -m sim.main --baseline full --duration 6 --no-render   # 主闭环还能�
 | `sim/main.py` 的 CLI | `sim/README.md`、根 `README.md` 的快速开始 |
 | `testbed/src/**`、`testbed/package.json` 的 scripts | `docs/testbed.md`、`evals/v0.2/README.md` |
 | `server/**`（L4 服务） | `server/README.md`、`docs/testbed.md` |
+| `sim_server/**`（G1 权威仿真） | `sim_server/README.md`、`docs/testbed.md` |
 | `.github/workflows/**` | `CONTRIBUTING.md`（流程真的变了吗） |
 
 ## 3. 文档怎么写（这份仓库的硬约定）
