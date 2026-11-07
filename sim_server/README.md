@@ -1,6 +1,6 @@
-# sim_server · G1 权威仿真环（P0 pose hold + P2b POLICY）
+# sim_server · G1 权威仿真环（P0 pose hold + P2b POLICY + P3 mink IK）
 
-> 状态：草案 · 最后更新 2026-11-07 · 基线 main@0ce0ed0 + P2b（未提交）
+> 状态：草案 · 最后更新 2026-11-08 · 基线 main@5e3e3bd + P3 IK（未提交）
 
 服务端权威的 MuJoCo 仿真环：载入 G1 的 MJCF、2 ms 定步长推进、按 60 Hz 把
 `BodyState`（`testbed/src/console/body.ts` 那份契约）推给 WS 客户端。
@@ -13,7 +13,8 @@ G1 joystick 策略。两套机构各管一段，**谁都不许冒充对方**。
 |---|---|
 | 一个能跑 30 s 不摔、位置可复现的 MuJoCo 世界（`mj_step` 2 ms） | **不是自研步态**：走路用的是别人的权重（来源见 §2b），我们没有训练，也没有改 obs |
 | **HOLD**：29 个位置执行器钉在 keyframe `stand`，kp=500 临界阻尼；30 s 实测漂 0.2 mm | **不是平衡控制器**：HOLD 没有抗扰能力，推一把就倒 |
-| **POLICY**：G1 joystick ONNX 速度跟踪，kp=75/kd=2；cmd (0.5,0,0) 实测 0.55 m/s、30 s 不摔 | **不是 IK**：mink 装了但一行没调 |
+| **POLICY**：G1 joystick ONNX 速度跟踪，kp=75/kd=2；cmd (0.5,0,0) 实测 0.55 m/s、30 s 不摔 | **不是抓取**：IK 只把**腕关节**送到点（位置任务），没有手部闭合、没有抓取力 |
+| **IK**：mink（QP 差分 IK，osqp）把右腕送到 `scene.json` 的取杯点，交位置执行器执行；末端误差实测 4.54 mm | **不是自研 IK**：阻尼最小二乘 / 手写雅可比一行都没有，解算只有 `mink.solve_ik` |
 | WS `/sim` 状态流：P2b **追加** `mode` 键（body.ts 契约字段一个没动） | 不是渲染器：three 场景、鲸鱼娘、UI 一律没动（`testbed/` 零改动） |
 
 **站得住 ≠ 策略能站**，这两件事必须分开记：
@@ -26,9 +27,27 @@ G1 joystick 策略。两套机构各管一段，**谁都不许冒充对方**。
 ## 1. 依赖
 
 复用 `server/.venv`（Python 3.13），本切片实测需要：`mujoco` / `mujoco-core` / `numpy`
-（P0）、**`onnxruntime` 1.31.1**（P2b 的 POLICY 推理）、以及 `fastapi` + `uvicorn[standard]`（已装）。
-`mink` 装了但这版没用上。**`onnxruntime` 只在本机 `server/.venv` 里验证过，没写进任何 requirements**——
-换机器要自己装（`pip install onnxruntime`），否则 `--walk` 会在加载权重那一步报错退出（exit code 2）。
+（P0）、**`onnxruntime` 1.31.1**（P2b 的 POLICY 推理）、`fastapi` + `uvicorn[standard]`、
+以及 P3 的 QP 栈 **`mink` 1.4.0 + `qpsolvers` 4.13 + `scipy` 1.18.1 + `osqp` 1.1.3**。
+**`onnxruntime` / QP 栈只在本机 `server/.venv` 里验证过，没写进任何 requirements**——
+换机器要自己装，否则 `--walk`（缺 onnxruntime）或 `--ik`（缺 mink/qpsolvers/osqp）会在加载那一步退出。
+
+**P3 依赖怎么装通的（2026-11-08，本机实测；踩过的坑记在这里）**：`mink` 需要 `qpsolvers`，`qpsolvers`
+需要 `scipy`，而 `scipy` 的 36.6 MB wheel 走**默认源**（经本机代理）反复在 16% 断流（schannel 握手失败 /
+server closed abruptly，resume 也断）。解法是**换国内镜像**，一次装完：`mink` 还只认**真实 solver**
+（`qpsolvers.available_solvers` 空着时 `import qpsolvers` 会 warn、`solve_qp` 直接报 `no QP solver found`），
+`quadprog` / `daqp` 在 cp313 没有 wheel，所以补 `osqp`（小、纯 wheel）。
+
+```bash
+export TEMP=<repo>/.tmp TMP=<repo>/.tmp
+P=server/.venv/Scripts/python.exe
+$P -m pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ scipy   # 36.6 MB / 24 s 装完
+$P -m pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ osqp
+$P -c "import mink, qpsolvers, scipy; print(qpsolvers.available_solvers)"                # ['osqp']
+```
+
+注意 `mink` 1.4.0 **没有 `__version__` 属性**（包里就没导出）：要打版本号用
+`importlib.metadata.version("mink")`；写 `mink.__version__` 会 AttributeError —— 那不是装坏了。
 
 ```bash
 # 仓库根目录；本机 %TEMP% 可能不可用，先指到 .tmp（AGENTS.md 第 1 节）
@@ -54,6 +73,10 @@ server/.venv/Scripts/python.exe -m sim_server.selfcheck --walk --seconds 30
 # ①'' P2a 动作自检（默认 clip = bonus/B_HandsUp，441 帧 / 8.82 s；七项见 §4c）
 server/.venv/Scripts/python.exe -m sim_server.selfcheck --mimic
 
+# ①'''' P3 IK 自检（右侧取杯点：末端误差 / 越限 / solve P50·P95 / 触发到到位 / 摔没摔）
+server/.venv/Scripts/python.exe -m sim_server.selfcheck --ik
+server/.venv/Scripts/python.exe -m sim_server.selfcheck --ik --ik-target desk_cup
+
 # ①''' 候选表：逐段跑注册表里的 clip（dance 那段是**保留的负结果**，会打 FAIL）
 server/.venv/Scripts/python.exe -m sim_server.selfcheck --mimic-candidates
 server/.venv/Scripts/python.exe -m sim_server.selfcheck --mimic --mimic-clip dance/J_Dance0_StepTouch
@@ -71,6 +94,8 @@ stdout 最后四行保持原样，方便复跑比对）；2 = `--walk` / `--mimi
 `--mimic-candidates` 的退出码另算：0 = 全部 clip 都能加载且**默认 clip 七项全绿**；
 1 = 默认 clip 有项不达标；2 = 有 clip 加载失败。
 `--walk` 的六项判据见 §4；它**不配速**，所以墙钟 2.4 s 跑完 80 s 仿真（决定它长短的是 `--seconds`）。
+`--ik` 的退出码：0 = 五项全达标；1 = 有不达标项；2 = 依赖或目标点起不来（mink/osqp 缺、
+`ik_targets` 没有那条 id、scipy 没装）。**`--ik` 也不配速**，它量的是仿真真值。
 
 ## 2b. P2b：HOLD / POLICY 两个模式
 
@@ -146,6 +171,47 @@ MIMIC 与 POLICY 互斥：给速度命令会先退场再交给 POLICY。
 回 HOLD 0.208 s，推理 p95 0.228 ms，**关节 0 超限 → 七项全绿**。换成 `dance/J_Dance0_StepTouch`
 仍然报 **1 处越限**（waist_roll），那一段留着当负结果，见 §4c。
 
+## 2d. P3：IK 第四个模式（伸手，不是走路、也不是抓取）
+
+**解算不是我们写的**：目标点 → 关节角只有一条路，`mink.solve_ik`（QP 形式的差分 IK，solver=`osqp`）。
+任务按任务书原文：`FrameTask(right_wrist_yaw_link)` + `PostureTask`（回 keyframe `stand`），
+外加两个结构性的选择（`ik.py` 的 docstring 有完整理由）：
+
+| 选择 | 为什么 |
+|---|---|
+| 浮动基座 + 除右臂/腰以外的关节用 **`constraints=[DofFreezingTask]` 精确冻住** | 传成普通 task 是**软**约束：实测基座会在 2 次迭代里平移 0.6 m 去"够到"目标 —— 那是作弊。冻住之后同一个目标点的残差从 0.0007 m 变成 0.30 m，这 0.30 m 才是真实可达距离 |
+| **腿冻住、腰放开**（3 个自由度） | 脚不动 = 站姿不变，不靠"往前栽"骗距离；腰转一点是人伸手时的自然补偿，也让机器人不必贴死在桌沿上 |
+| **只约束位置，不约束朝向**（`orientation_cost=0`） | P3 判据是末端**位置**误差；抓取姿态（上方抓 / 侧面抓）还没定论，硬塞朝向目标只会把位置解拖偏。这是已知边界，不是"已经会抓杯子" |
+
+**目标点**：`scene.json` 的 `ik_targets` 段（`desk_cup`，桌沿取杯点，坐标写在 stored 系）。
+为什么不是任务书举例的**矮桌**（low_table，顶面 0.32 m）：直立 G1 的右腕自肩可达半径实测
+**0.361–0.381 m**（`--ik` 会打印），肩在 1.08 m，矮桌杯面低 0.76 m —— **够不着**。这是负结果，
+不改判据、也不把机器人按低。桌（desk）顶面 0.72 m 时腕要到 0.85 m（杯高 0.13，抓杯沿/杯身上部），
+距肩 0.44 m，靠腰的 0.5 rad 补偿刚好落在可达边界内。
+
+**触发流程**（`modes.py`，@own 的四个常量）：HOLD 站定 `IK_SETTLE_S=0.10 s` → mink 解
+（`IK_SOLVE_MAX_S=2 s` 预算，收敛即停；「解不动」= 连续 150 次迭代误差没改善 ≥1 mm 就停，
+不空烧预算）→ **交位置执行器**（`PoseHold`，kp=500 **一个数都不动**，只换 29 个位置目标）→
+闭环保持 `IK_HOLD_S=1.0 s` → 用 `RAMP_S=0.2 s` 的同一套 ramp 回 HOLD。
+进/退场都走 ramp，没有瞬跳；IK 没有刹车段（和 MIMIC 同理由：原地动作，没有 POLICY 那种动量）。
+
+**为什么"保持"段是闭环的（这是负结果，不是设计偏好）**：只把解析解写进位置执行器（开环），
+末端在保持段会**摆 ±20–45 mm**（body sway：腰目标没变、但躯干在踝上慢慢晃）。所以 `reach/hold`
+两段每控制帧用 mink 再解 2 次迭代、**只放开右臂**（腰与腿继续钉在解析解上），把腕压回目标。
+实测开环 22.6–33.3 mm → 闭环 4.54 mm。另外两个踩过的坑：① 在进场 ramp（alpha<1）里就开始逐帧
+闭环，mink 会从"还站在 stand"的姿态出发、每帧把右肘一路爬到肘关节上限（1.28→2.09 rad，1 处越限）——
+现在闭环只在 `alpha≥1` 后跑；② `ConfigurationLimit` 与"冻住某些 dof"会互斥（物理把**冻结**的
+left_knee 推过限位 2e-3 rad 后 QP infeasible），兜底是当步退成"只用等约束"并**单独计数**
+（`fallback_no_limits`），限位仍由执行器 ctrlrange 截断 + selfcheck 的越限计数负责。
+
+**测试站位**（布置，不是判据）：目标家具前缘外 `IK_STAND_GAP_M=0.21 m`、正对 +y、x 取目标点 x
+（站位从 `scene.json` 推，写死不下来的坐标）。实测 by=1.83–1.85 这一段末端误差 4.4–4.7 mm；
+再近（1.86）跳到 9.5 mm，再近（≥1.88）脚顶住桌子直接摔。
+
+**实测（`--ik`，2026-11-08，本机，n=1，CPU 单线程；同一命令复跑两次末端误差与到位耗时逐位相同）**：
+末端误差 **4.54 mm**、关节越限 **0**、单次 solve p95 **2.2–2.6 ms**（n=134）、触发到到位 **0.580 s**、
+不摔（z_min 0.7900）→ **五项全绿**。解算本身只用了 **2 次** mink 迭代、6.5 ms 墙钟（`plan_err` 2.92 mm）。
+
 ## 3. WS 协议（`ws://127.0.0.1:8788/sim`）
 
 C → S（随时发，覆盖上一条）：
@@ -177,7 +243,7 @@ S → C（每 tick 一条，连接后先补一条 full）：
 | `geom.mesh` | **P0c 追加**，同样只在首帧：每个 geom 的 mesh 资产名（非网格 geom 为 `""`）。g1.xml 里 geom 大多没写 name（编译后是 `None` → `geom_N`），**名字反推不出网格**，所以单独给 |
 | `geom.meshMeta` | **P0c 追加**，同样只在首帧：mesh 名 → `{pos, quat, scale}`，即 MuJoCo 给该网格算的网格系。浏览器烘焙顶点要用它：`v = R(q)ᵀ·(v_stl·scale − pos)`。少这一项，整机包围盒会从 1.3228 m 虚胖到 1.4048 m、脚陷地里 8 cm（`probe-mesh.mjs` 量的就是这件事） |
 | `contacts` | `data.ncon`，活跃接触点数 |
-| `mode` | **P2b 追加**，`"HOLD"` / `"POLICY"`；**P2a 追加** `"MIMIC"`：当前谁在控。body.ts 契约字段一个没动 |
+| `mode` | **P2b 追加**，`"HOLD"` / `"POLICY"`；**P2a 追加** `"MIMIC"`；**P3 追加** `"IK"`：当前谁在控。body.ts 契约字段一个没动 |
 
 `jointTargets`：`null` = 用 keyframe `stand`；给对象则只覆盖列出的关节（其余沿用 keyframe），
 未知关节名会被拒绝并回落到 `null`（`/health` 的 `last_error` 里能看到原因）。
@@ -186,6 +252,13 @@ S → C（每 tick 一条，连接后先补一条 full）：
 
 **P2a 追加一条上行消息**：`{"mimic": "play"}` 起播一段动作、`{"mimic": "stop"}` 取消。
 只在 HOLD 起播（POLICY 在跑时先排队）；进度看 `/health` 的 `mimic` 段。
+
+**P3 追加两条**：`{"ik": "play"}` 开始伸手取物、`{"ik": "stop"}` 取消（可选 `"ikTarget": "<id>"`
+指定 `ik_targets` 里的条目）。互斥规则全在 `modes.start_ik`：MIMIC 占着关节时直接拒绝（`ik_error`），
+POLICY 在跑时排队等回 HOLD，回 HOLD 后若有速度命令则命令优先。进度看 `/health` 的 `ik` 段
+（`phase` / `target` / `err_m` / `solve_p95_ms` / `time_to_reach_s` / `error`）。
+**注意**：`app` 的出生点在房间中央，杯子在 2.7 m 外 —— 从这里直接发 `{"ik":"play"}` 会如实报
+"未收敛"（243 ms 后放弃，不空烧 2 s）。要看到成功，得先让机器人走到桌边（`--ik` 是这么摆的）。
 
 `cmd` 现在是真会动的：给速度 → 进 POLICY，机器人在仿真里走起来，`blocked` 也随之
 可能变 `false`；给 0 → 刹车后回 HOLD 站住。**在 POLICY 稳定走之前（进 ramp 的 0.2 s 内）
@@ -231,6 +304,20 @@ S → C（每 tick 一条，连接后先补一条 full）：
 | `fell=` | `z_min ≤ 0.5` | **False** | False ✅ |
 | `return_to_hold_s=` | 最后一帧 → mode=HOLD 且 alpha=0 的仿真秒数 | **0.208** | ≤2.0 ✅ |
 | `infer_p95_ms=` | 单次推理 P95（不含 obs 组装；每控制帧两调：参考 + 动作） | **0.228**（n=473；同段复跑 0.295，就是这个量级的抖动） | —（P2a 计划 ≤1 ms） |
+
+### P3 五项（`--ik`，目标 `desk_cup`，2026-11-08，本机，n=1，CPU 单线程）
+
+| 行 | 定义 | 实测 | 达标线 |
+|---|---|---|---|
+| `end_err=` | **到位之后**末端真值到目标点的最大误差（m，mj 系直线距离；到位前的"正在伸过去"不计） | **0.00454**（4.54 mm，62 帧） | ≤0.01 ✅ |
+| `joints_out_of_limit=` | 超 `jnt_range` 超过 1e-3 的关节数（全程取最大） | **0** | 0 ✅ |
+| `solve_p50= / solve_p95=` | **单次** `mink.solve_ik` 调用的墙钟 P50/P95（解算段 2 次 + 闭环保持段 132 次，合起来 134 个样本；不含积分/FK） | **1.65 / 2.16–2.63**（跨两次运行） | p95 ≤5 ms ✅ |
+| `time_to_reach_s=` | `start_ik` → 连续 5 个控制帧末端 ≤5 mm 的**仿真**秒数 | **0.580** | ≤2.5 ✅ |
+| `z_min= / fell=` | 全程最低 pelvis 高度 / `z_min ≤ 0.5` | **0.7900 / False** | 不摔 ✅ |
+
+`solve_iters` 是**解析解**用掉的迭代数（实测 2 次，6.5 ms 墙钟）；`plan_err` 是运动学残差（2.92 mm），
+跟 `end_err` 是两件事：前者是"解算解得准"，后者是"执行器真的把腕送过去了"（中间隔着 PD、body sway 与
+闭环修正）。两个都打出来，免得拿一个充另一个。
 
 ### 候选表（`--mimic-candidates`，2026-11-07，本机，n=1；判据与 `--mimic` 同一份）
 
@@ -290,7 +377,9 @@ Python 侧不另写一遍力矩。
 | `world.py` | 载入 MJCF（+ 地板）、`mj_step` 2 ms、`step(n)` / `state()`（BodyState 同构）、`height()` / `drift()`；**mj(z-up) → three(y-up) 的转换只在这里** |
 | `stand.py` | 读 keyframe + `ctrlrange` + kp/kd，PD 保位；`jointTargets` 覆盖与 clip |
 | `app.py` | FastAPI + WS `/sim` + `/health`；定步长循环只 `publish` 最新快照（**不做 WS I/O**），每客户端一条独立发送协程按 seq 取最新（慢客户端合并中间帧，不阻塞物理） |
-| `selfcheck.py` | headless 跑 N 秒，打印四行指标（`--walk` 打印 P2b 六项），exit code 0/1 |
+| `selfcheck.py` | headless 跑 N 秒，打印四行指标（`--walk` 打 P2b 六项 / `--mimic` 七项 / `--ik` 五项），exit code 0/1 |
+| `ik.py` | **IK 的解算封装**：`mink.Configuration` + `FrameTask(right_wrist_yaw_link)` + `PostureTask`（回 stand）、等约束冻基座/腿、`frame→关节角`、`actuator_targets`（按关节名映射，不按下标猜）。**不自研 IK** |
+| `scene.json` | 场景单一真源：`boxes`（= physics.ts，parity 脚本逐条比）+ **P3 的 `ik_targets`**（取杯点；坐标写 stored 系，换算在 `scene.py`） |
 | `modes.py` | **HOLD/POLICY 状态机**：滞回判据、0.2 s ramp（目标 + kp + kd）、回 HOLD 前的刹车；所有 `ctrl` 都从这里出 |
 | `policies/g1_joystick.py` | ONNX 推理封装：103 维 obs 组装（照训练端）、50 Hz 控制、动作→29 个位置目标、权重 md5 校验 |
 | `policies/g1_mimic.py` | **MIMIC 的动作源**：`CLIPS` 注册表（clip / 字节数 / sha256 / 帧数）、154 维 obs 组装、每控制帧两调推理、参考帧数二分探出、动作→29 个位置目标 |
@@ -330,4 +419,12 @@ Python 侧不另写一遍力矩。
     成立，换模型 / 换增益要重跑。
 11. **MIMIC 有 1 次关节越限**（0.0144 rad @ waist_roll，见 §4c）：不达标项，原因与候选修法都写在那里，
     没有为了过关去改判据或改世界物理。
+12. **IK 只验了"腕到点"**：没有手部闭合/抓取力/抓稳的验收，也没有碰撞规避（`CollisionAvoidanceLimit`
+    没开）—— 腕到点是位置任务，不等于把杯子拿起来。朝向不受约束（`orientation_cost=0`），
+    抓取姿态是 **TBD**。
+13. **IK 的成功依赖站位**：目标点在桌沿，直立 G1 的腕可达半径只有 0.36–0.38 m，所以必须站在桌沿外
+    0.21 m 左右。从出生点直接发 IK 会如实报未收敛（够不着），**不是坏了**。要闭环地"走过去再抓"，
+    得先有可用的 `goto`（P2b 的 POLICY 只有速度跟踪，没有到点能力）。
+14. **IK 的闭环只在右臂上**：腰/腿在保持段是**固定目标**（不闭环），躯干 sway 靠手去补；
+    腰如果也闭环会与手臂抢、实测把身体带倒（`z_min` 掉到 0.07）。
    （POLICY 行走时 pelvis z 稳定在 0.72–0.76；T-pose 直腿站在 0.792，两者不是一回事。）

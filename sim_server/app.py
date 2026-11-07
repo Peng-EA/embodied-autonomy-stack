@@ -4,6 +4,7 @@
 
   C -> S  {"t": <client_ts>, "cmd": {"vx": <m/s>, "vz": <m/s>, "yaw": <rad>}, "jointTargets": {...}|null}
           P2a 追加：{"mimic": "play"|"stop"}   —— 播一段现成 mimic 动作（动作，不是走路）
+          P3 追加：{"ik": "play"|"stop"}       —— 右手伸到 scene.json 的 ik_targets 取杯点
   S -> C  {"tSim", "x", "y", "z", "yaw", "speed", "blocked", "joints",
            "geom": {"xpos": [...], "xmat": [...]}, "contacts": <n>, "mode": "HOLD"|"POLICY"|"MIMIC"}
 
@@ -25,6 +26,12 @@ HF exptech/g1-moves，CC-BY-4.0，见 policies/g1_mimic.py）：
 - 客户端发 {"mimic":"play"} → 先在 HOLD 站定 0.5 s，ramp 0.6 s 进片头，然后 50 Hz 播完整段，
   播完自动 ramp 回 HOLD；送 {"mimic":"stop"} 或给速度命令都会提前退场（同一套 ramp）。
 - 它不是走路：MIMIC 与 POLICY 互斥，cmd 有速度时 MIMIC 让路、退回 HOLD 再交棒。
+
+P3 追加第四段 **IK**（mink 解右腕到 scene.json 的 ik_targets，见 sim_server/ik.py）：
+- 客户端发 {"ik":"play"} → 先在 HOLD 站定 0.1 s → mink 解（预算 2 s，收敛即停）→ 交位置执行器
+  （PoseHold，kp=500 不动）→ 闭环保持 1 s → ramp 回 HOLD；{"ik":"stop"} 或速度命令提前退场。
+- IK 与 POLICY / MIMIC 三者**互斥**：同一时刻只有一套机构写关节（判据/ramp 全在 modes.py）。
+- "ik" 只在 HOLD 起手；POLICY 在跑时请求会排队，回 HOLD 后若又有速度命令则命令优先。
 
 跑法（仓库根目录，端口默认 8788，server 的 L4 服务占 8787）：
   server/.venv/Scripts/python.exe -m sim_server.app --port 8788
@@ -121,6 +128,18 @@ class SimRuntime:
                 self.mode.stop_mimic()
             else:
                 self.last_error = "mimic must be 'play' or 'stop'"
+
+        # P3：IK 请求（右手伸到 ik_targets 的取杯点）。与 MIMIC / POLICY 互斥，
+        # 互斥规则全在 modes.start_ik 里（这里只透传，不自己判）。
+        if "ik" in msg:
+            want = msg["ik"]
+            if want in (True, "play", "start", 1):
+                target = msg.get("ikTarget")          # 可选：ik_targets 里的 id
+                self.mode.start_ik(str(target) if target else None)
+            elif want in (False, "stop", "cancel", 0, None):
+                self.mode.stop_ik()
+            else:
+                self.last_error = "ik must be 'play' or 'stop'"
 
         # 注意：jointTargets 只在 HOLD 生效；POLICY 的目标归网络（modes.py 里说明）
 
@@ -269,6 +288,15 @@ def create_app(runtime: SimRuntime | None = None, tick_hz: float = TICK_HZ) -> F
             # P2b：模式机对外的全部可见状态（浏览器只需要 snapshot 里的 "mode"）
             "mode": rt.mode.info(),
             "infer_p95_ms": rt.mode.infer_p95_ms(),
+            # P3：IK 的进度（phase / 目标 / 末端误差 / solve P95 / 到位耗时）
+            "ik": {
+                "phase": rt.mode.info()["ik_phase"],
+                "target": rt.mode.info()["ik_target"],
+                "err_m": rt.mode.info()["ik_err_m"],
+                "solve_p95_ms": rt.mode.info()["ik_solve_p95_ms"],
+                "time_to_reach_s": rt.mode.info()["ik_time_to_reach_s"],
+                "error": rt.mode.info()["ik_error"],
+            },
             # P2a：动作通道（mimic）的进度；不加载权重时为 None
             "mimic": {
                 "phase": rt.mode.info()["mimic_phase"],

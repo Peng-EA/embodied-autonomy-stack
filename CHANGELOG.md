@@ -11,6 +11,12 @@
 
 ### Added
 
+- **抓取能力：mink IK（P3）**：新增 `sim_server/ik.py`（`mink.Configuration` + `FrameTask(right_wrist_yaw_link)` + `PostureTask`
+  + `DofFreezingTask` 冻住基座与腿），`modes.py` 加第四模式 `IK`（settle 0.10 s → 解 → 交 kp=500 位置执行器 → 闭环保持 1 s → RAMP 退场，
+  与 POLICY/MIMIC 互斥）。依赖链 mink 1.4.0 / qpsolvers 4.13 / scipy 1.18.1 / osqp（scipy 走默认源必断，用 aliyun 镜像 24 s）。
+  实测：末端误差 **4.54 mm**（≤10）、0 越限、solve P95 2.13 ms（≤5）、触发到到位 0.580 s（≤2.5）、不摔（z_min 0.7900）。
+  三条负结果入 README：开环 ±20–45 mm、ramp 中闭环撞肘限位、腰进闭环会把身体带倒。
+  边界：站位是摆的（非 goto）、抓取姿态与手部闭合未做。
 - **探针端口隔离（P0f）**：`testbed/scripts/lib/sim-server.mjs` 新增 `acquireSimServer()`——探针默认 8790 起真 bind 找空闲端口、
   自起 sim_server、跑完关；8788 不在扫描区间，绝不复用别人的实例。端口被抢或 `/health` 应答的是旧实例 → exit 3
   并打印「疑似另一个 sim_server 在跑」。`--port/--url` 改为**显式 attach**：只输出 `attached_to=existing` + `observed_only`

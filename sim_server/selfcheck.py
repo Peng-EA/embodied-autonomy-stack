@@ -1,6 +1,6 @@
 """headless 自检。
 
-两种跑法，判据都是任务书原文，不许为了让数字好看去改这里：
+六种跑法，判据都是任务书原文，不许为了让数字好看去改这里：
 
 1) P0a（默认）：pose hold 跑指定秒数，最后四行 height= / drift= / tick_hz= / nan=
      server/.venv/Scripts/python.exe -m sim_server.selfcheck --seconds 30
@@ -35,7 +35,17 @@
    几何全部来自 sim_server/scene.json（= physics.ts 的同一份中心/半长），本文件不写坐标。
    出生点离桌子正面的 2.0 m 是**测试布置**不是判据：它只决定「撞上发生在第几秒」。
 
-5) P5 --stop-abrupt：cmd=0.5 走 5 s → **立刻** cmd=0（模拟 L2 反射 walk→idle 打断），
+5) P3 --ik：右手到 scene.json 的取杯点（desk_cup）。HOLD 站定 → mink 解（预算 2 s，收敛即停）
+   → 交位置执行器（PoseHold，kp=500 不动）→ 闭环保持 → ramp 回 HOLD。
+     server/.venv/Scripts/python.exe -m sim_server.selfcheck --ik
+     输出：plan_err / solve_p50 / solve_p95 / time_to_reach_s / end_err / joints_out_of_limit /
+           z_min / fell
+   达标（任务书原文）：末端误差 ≤0.01 m；0 关节越限；单次 solve P95 ≤5 ms；触发到到位 ≤2.5 s；
+   不摔（z_min>0.5）。
+   **解完不是终点**：开环执行（只把解析解写进执行器）实测末端摆 ±20-45 mm，所以保持段
+   有一个只放开右臂的闭环修正（每控制帧 2 次 mink 迭代）；这是实测结论，写在 README。
+
+6) P5 --stop-abrupt：cmd=0.5 走 5 s → **立刻** cmd=0（模拟 L2 反射 walk→idle 打断），
    反复跑并打印每次 fell / z_min / stop_s（速度首次 <0.05 的耗时）/ hand_over_s /
    v_hand（交接时速度）/ v_max（打断后的最大速度）。
      server/.venv/Scripts/python.exe -m sim_server.selfcheck --stop-abrupt --trials 5
@@ -107,6 +117,22 @@ STOP_SPEED_EPS = 0.05        # 「停住」口径（任务书 P5：|v|<0.05 m/s 
 MIMIC_FELL_Z = 0.5          # 与 --walk 同一个「摔」口径：pelvis z ≤ 0.5
 MIMIC_RETURN_MAX_S = 2.0    # 播完 ≤2 s 回 HOLD
 MIMIC_MAX_SIM_S = 120.0     # 兜底：正常约 39 s，走不完说明卡住了
+
+# ---- P3 --ik 判据（任务书原文，一个数都别动）----
+IK_END_ERR_MAX = 0.01        # 末端误差 ≤0.01 m
+IK_SOLVE_P95_MAX_MS = 5.0    # 单次 solve 的 P95
+IK_TIME_TO_REACH_MAX_S = 2.5 # 触发到到位
+IK_FELL_Z = 0.5              # 与 --walk 同一个「摔」口径：pelvis z ≤ 0.5
+
+# ---- P3 测试布置（不是判据）----
+# 站在目标家具（默认 desk）前缘外 IK_STAND_GAP_M、正对 +y；x 取目标点的 x。
+# 这个距离是**布置**不是判据：目标点在 0.72 m 高的桌面、腕要够到 0.85 m，直立 G1 的右腕
+# 自肩可达半径实测 0.361-0.381 m，所以站位只能离桌沿 0.2 m 上下（见 README 的 P3 一节）。
+# 实测 by=1.83-1.85 这一段末端误差 4.4-4.7 mm；再近（1.86）误差跳到 9.5 mm，再近（≥1.88）
+# 脚会顶住桌子、直接摔。
+IK_STAND_GAP_M = 0.21
+IK_YAW_DEG = 90.0
+IK_MAX_SIM_S = 20.0
 
 # ---- P1 --collide 判据（任务书原文，一个数都别动）----
 COLLIDE_CMD = {"vx": 0.5, "vz": 0.0, "yaw": 0.0}
@@ -745,6 +771,224 @@ def _run_mimic_candidates(args: argparse.Namespace) -> int:
     return 0 if default_ok else 1
 
 
+# ---------- P3 --ik ----------
+
+
+def _ik_episode(args: argparse.Namespace) -> dict[str, Any]:
+    """伸手取物一整套：HOLD 站定 → mink 解 → 交位置执行器 → 保持 → 回 HOLD。**只量不判**。
+
+    口径（判据在 _ik_fails，别处不要另编）：
+    - plan_err_m    mink 解出来的运动学残差（末端到目标点的直线距离）
+    - end_err_m     物理仿真里**末端真值**到目标点的最大误差；只统计「到位之后」的帧
+                    （到位 = modes.IK_ACQUIRE_FRAMES 连续控制帧 ≤ modes.IK_TOL_M），
+                    到位之前那段是"正在伸过去"，拿它当定位精度没有意义
+    - solve_ms      **每一次** mink.solve_ik 调用的墙钟：解算段（IK）与闭环保持段（servo）
+                    分开打，判据取两者合起来的 P95（单次 solve 的口径）
+    - time_to_reach start_ik → 到位（仿真秒，不是墙钟；--ik 不配速）
+    - fell          pelvis z ≤ IK_FELL_Z（与 --walk 同一个口径）
+    """
+    import numpy as np
+
+    from .ik import IkSolver, frame_point_mj
+
+    world = World(args.xml)
+    hold = PoseHold(world)
+    mode = ModeController(world, hold)
+    world.reset()
+
+    if args.ik_target is not None:
+        target = world.scene.ik_target(args.ik_target)      # 不认识的 id 当场抛
+    else:
+        target = world.scene.ik_target(None)
+    point = np.asarray(target.mujoco_point, dtype=float)
+
+    # 站位从 scene.json 推：目标家具的前缘（mj 系 y 小的一侧）外 IK_STAND_GAP_M，x 取目标 x。
+    furniture = world.scene.box(target.furniture or "desk")
+    _, desk_y, _ = furniture.mujoco_pos
+    _, desk_half_y, _ = furniture.mujoco_half
+    start = (float(point[0]), float(desk_y - desk_half_y) - IK_STAND_GAP_M)
+
+    theta = math.radians(IK_YAW_DEG)
+    quat = (math.cos(theta / 2.0), 0.0, 0.0, math.sin(theta / 2.0))
+    world.place_base_mj(start[0], start[1], float(world.data.qpos[2]), quat)
+    mode.reset()                          # 只清模式状态，不动刚摆好的基座
+
+    try:
+        mode.start_ik(args.ik_target)
+    except Exception as exc:              # noqa: BLE001
+        raise RuntimeError(f"IK 起不来：{exc}") from exc
+
+    z_min = float(world.data.qpos[2])
+    viol_max = 0
+    viol_names: list[str] = []
+    nan = False
+    errs: list[float] = []
+    mode_end = mode.mode
+    t0 = float(world.data.time)
+    while world.data.time - t0 < IK_MAX_SIM_S:
+        mode.advance(STEPS_PER_TICK)
+        z_min = min(z_min, float(world.data.qpos[2]))
+        v, names = _joint_violations(world)
+        if v > viol_max:
+            viol_max, viol_names = v, names
+        # 只在"伸手 / 保持"两段里量末端误差：退场 ramp 是**回 stand**，那段误差会自然变大，
+        # 拿它当定位精度就是拿返程当成绩
+        if mode.ik_reaching:
+            errs.append(float(np.linalg.norm(frame_point_mj(world) - point)))
+        mode_end = mode.mode
+        if not world.finite():
+            nan = True
+            break
+        if mode.ik_done:
+            break
+
+    plan = mode.ik_plan
+    solve_ms: list[float] = []
+    if plan is not None:
+        solve_ms.extend(plan.solve_ms)
+    solve_ms.extend(mode._ik_servo_solve_ms)
+
+    reach_s = mode.ik_time_to_reach_s
+    if reach_s is not None:
+        hold_start = min(
+            len(errs), int(round(reach_s / (STEPS_PER_TICK * world.model.opt.timestep)))
+        )
+        hold_errs = errs[hold_start:]
+    else:
+        hold_errs = []
+    end_err = max(hold_errs) if hold_errs else float("nan")
+    return {
+        "target": target,
+        "point_mj": point,
+        "base_mj": start,
+        "stand_gap_m": IK_STAND_GAP_M,
+        "yaw_deg": IK_YAW_DEG,
+        "ik_error": mode.ik_error,
+        "plan": plan,
+        "plan_err_m": float("nan") if plan is None else plan.err_m,
+        "plan_iters": None if plan is None else plan.iters,
+        "plan_wall_s": float("nan") if plan is None else plan.wall_s,
+        "plan_solve_ms": [] if plan is None else list(plan.solve_ms),
+        "servo_n": len(mode._ik_servo_solve_ms),
+        "servo_failed": mode._ik_servo_failed,
+        "servo_fallback": mode._ik_servo_fallback,
+        "solve_ms": solve_ms,
+        "end_err_m": end_err,
+        "end_err_last_m": errs[-1] if errs else float("nan"),
+        "n_hold": len(hold_errs),
+        "time_to_reach_s": reach_s,
+        "hold_s": float(mode.info()["ik_hold_s"]),
+        "viol_max": viol_max,
+        "viol_names": viol_names,
+        "z_min": z_min,
+        "fell": bool(z_min <= IK_FELL_Z),
+        "nan": nan,
+        "mode_end": mode_end,
+        "ik_done": mode.ik_done,
+        "fail_count": (plan.failed if plan is not None else 0),
+        "no_limit_fallback": (plan.no_limit_fallback if plan is not None else 0),
+    }
+
+
+def _ik_fails(m: dict[str, Any]) -> list[str]:
+    """P3 判据的**唯一**一份实现（--ik 用；别处不要另抄一套）。"""
+    fails: list[str] = []
+    if m["ik_error"]:
+        fails.append(f"ik_error: {m['ik_error']}")
+    if m["plan"] is None:
+        fails.append("mink 一次都没解出来（plan 是 None）")
+        return fails
+    if not (m["end_err_m"] == m["end_err_m"]):
+        fails.append("end_err=nan（没到位，或全程没有误差样本）")
+    elif m["end_err_m"] > IK_END_ERR_MAX:
+        fails.append(f"end_err {m['end_err_m']:.4f} m > {IK_END_ERR_MAX} m")
+    if m["viol_max"] > JOINT_VIOL_MAX:
+        fails.append(f"joint_out_of_limit {m['viol_max']} > {JOINT_VIOL_MAX}")
+    if not m["solve_ms"]:
+        fails.append("没有 solve 样本（P95 无从谈起）")
+    elif float(np.percentile(m["solve_ms"], 95.0)) > IK_SOLVE_P95_MAX_MS:
+        fails.append(
+            f"solve p95 {float(np.percentile(m['solve_ms'], 95.0)):.2f} ms > {IK_SOLVE_P95_MAX_MS} ms"
+        )
+    if m["time_to_reach_s"] is None:
+        fails.append("没到位（time_to_reach=nan）")
+    elif m["time_to_reach_s"] > IK_TIME_TO_REACH_MAX_S:
+        fails.append(
+            f"time_to_reach {m['time_to_reach_s']:.3f} s > {IK_TIME_TO_REACH_MAX_S} s"
+        )
+    if m["fell"]:
+        fails.append(f"fell=True (z_min {m['z_min']:.4f} <= {IK_FELL_Z})")
+    if m["nan"]:
+        fails.append("nan in qpos/qvel")
+    return fails
+
+
+def _run_ik(args: argparse.Namespace) -> int:
+    """P3：伸手取物，打末端误差 / 关节越限 / solve P50·P95 / 触发到到位 / 摔没摔。"""
+    import numpy as np
+
+    try:
+        m = _ik_episode(args)
+    except Exception as exc:              # noqa: BLE001 —— 依赖/目标点问题必须原样报给复跑的人
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return 2
+
+    plan = m["plan"]
+    print(
+        f"ik: target={m['target'].id} frame={m['target'].frame} "
+        f"point_mj=({m['point_mj'][0]:.3f},{m['point_mj'][1]:.3f},{m['point_mj'][2]:.3f}) "
+        f"furniture={m['target'].furniture or 'n/a'}"
+    )
+    print(
+        f"ik: base_mj=({m['base_mj'][0]:.2f},{m['base_mj'][1]:.2f}) "
+        f"gap={m['stand_gap_m']:.2f}m yaw={m['yaw_deg']:g}deg "
+        f"(test setup, not a criterion)  solver=osqp  free_joints=right arm + waist"
+    )
+    if plan is not None:
+        print(
+            f"ik: solve_iters={plan.iters} plan_err={plan.err_m * 1000:.2f}mm "
+            f"wall={plan.wall_s * 1000:.1f}ms "
+            f"p50={plan.p50_ms:.2f} p95={plan.p95_ms:.2f}ms "
+            f"viol={len(plan.violations)} fallback_no_limits={plan.no_limit_fallback} "
+            f"failed={plan.failed}"
+        )
+    solve_ms = m["solve_ms"]
+    p50 = float(np.percentile(solve_ms, 50.0)) if solve_ms else float("nan")
+    p95 = float(np.percentile(solve_ms, 95.0)) if solve_ms else float("nan")
+    print(
+        f"ik: solve_p50={p50:.2f}ms solve_p95={p95:.2f}ms "
+        f"(n={len(solve_ms)}: plan {len(m['plan_solve_ms'])} + closed-loop hold {m['servo_n']};"
+        f" one solve = one mink.solve_ik call)  "
+        f"servo_failed={m['servo_failed']} servo_fallback_no_limits={m['servo_fallback']}"
+    )
+    reach = m["time_to_reach_s"]
+    print(
+        f"ik: time_to_reach_s={'n/a' if reach is None else f'{reach:.3f}'}  "
+        f"(start_ik -> 5 consecutive frames <=5 mm; sim s)  hold_s={m['hold_s']:.2f}"
+    )
+    print(
+        f"ik: end_err={m['end_err_m'] * 1000:.2f}mm "
+        f"last={m['end_err_last_m'] * 1000:.2f}mm  (max over {m['n_hold']} frames after arrival;"
+        f" measured end-effector position in the physics sim)"
+    )
+    print(
+        f"ik: joints_out_of_limit={m['viol_max']}"
+        + (f" {m['viol_names'][:3]}" if m["viol_names"] else "")
+    )
+    print(f"ik: z_min={m['z_min']:.4f}  fell={m['fell']}  mode_end={m['mode_end']}")
+
+    fails = _ik_fails(m)
+    if fails:
+        print("FAIL: " + "; ".join(fails), file=sys.stderr)
+        return 1
+    print(
+        f"PASS: end_err={m['end_err_m'] * 1000:.2f}mm<={IK_END_ERR_MAX * 1000:g}mm, "
+        f"0 over-limit, solve_p95={p95:.2f}ms<={IK_SOLVE_P95_MAX_MS:g}ms, "
+        f"time_to_reach={reach:.3f}s<={IK_TIME_TO_REACH_MAX_S:g}s, fell=False"
+    )
+    return 0
+
+
 # ---------- P1 --collide ----------
 
 
@@ -959,6 +1203,14 @@ def main(argv: list[str] | None = None) -> int:
         help="P2a：逐段跑注册表里的 clip 并打候选表（判据与 --mimic 同一份）",
     )
     ap.add_argument(
+        "--ik", action="store_true",
+        help="P3：HOLD 站定 → mink 解 IK → 交位置执行器 → 保持 → 回 HOLD，打末端误差/越限/solve/到位耗时",
+    )
+    ap.add_argument(
+        "--ik-target", default=None,
+        help="P3 目标点 id（scene.json 的 ik_targets；默认取第一条）",
+    )
+    ap.add_argument(
         "--collide", action="store_true", help="P1：朝桌子走 8 s，量 blocked / 穿透 / 摔没摔"
     )
     ap.add_argument(
@@ -988,13 +1240,18 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     picked = [
         name
-        for name in ("walk", "collide", "mimic", "mimic_candidates", "stop_abrupt")
+        for name in ("walk", "collide", "mimic", "mimic_candidates", "stop_abrupt", "ik")
         if getattr(args, name)
     ]
     if len(picked) > 1:
-        ap.error("--walk / --collide / --mimic / --mimic-candidates / --stop-abrupt 是五套自检，别一起跑")
+        ap.error(
+            "--walk / --collide / --mimic / --mimic-candidates / --stop-abrupt / --ik "
+            "是六套自检，别一起跑"
+        )
     if args.walk:
         return _run_walk(args)
+    if args.ik:
+        return _run_ik(args)
     if args.stop_abrupt:
         return _run_stop_abrupt(args)
     if args.collide:

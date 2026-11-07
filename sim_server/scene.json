@@ -31,5 +31,15 @@
     { "id": "low_table", "label": "矮桌", "kind": "furniture", "center": [0.45, 0.16, -0.25], "half": [0.34, 0.16, 0.26] },
     { "id": "side_table", "label": "边几", "kind": "furniture", "center": [-0.45, 0.16, 0.62], "half": [0.18, 0.16, 0.18] },
     { "id": "plant_pot", "label": "植物盆", "kind": "furniture", "center": [2.9, 0.2, -3.2], "half": [0.2, 0.2, 0.2] }
+  ],
+  "ik_targets": [
+    {
+      "id": "desk_cup",
+      "label": "桌沿取杯点（右手腕）",
+      "furniture": "desk",
+      "point": [1.55, 0.85, -2.1],
+      "grasp_height": 0.13,
+      "note": "来历：desk 顶面 stored y = 0.36 + 0.36 = 0.72，杯子（高 0.13 m）放在桌面上、离桌子前缘（stored z = -2.05）内侧 0.05 m 处，右手抓杯沿/杯身上部 → 腕关节要到 (x=1.55, y=0.72+0.13=0.85, z=-2.10)。抓点没有再往下放（0.80）是因为实测腕下 0.1 m 的手会压住桌沿、肩 roll 执行器打满 25 N·m、末端误差跳到 0.10 m（负结果，见 sim_server/README.md）。point 是**右手腕要到达的点**，不是杯心；坐标写在 stored 系（physics.ts / three：x 右、y 上、z 朝屏幕外），换算在 scene.py 的 IkTarget.mujoco_point 里做一次。为什么不按任务书举例用矮桌（low_table，顶面 0.32）：直立 G1 的右腕自肩可达半径实测 0.361-0.381 m（见 sim_server/README.md 的 P3 一节），肩在 1.08 m，矮桌杯面低 0.76 m —— 够不着，这是负结果，不改判据、也不把机器人按低。"
+    }
   ]
 }

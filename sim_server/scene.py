@@ -78,11 +78,39 @@ class Box:
 
 
 @dataclass(frozen=True)
+class IkTarget:
+    """一个 IK 目标（P3）：**抓取点**在 stored 系里写，换算只在本文件的属性里做一次。
+
+    和 Box 的分工完全一致：数值进 scene.json，换算进 scene.py，ik.py 只读 mujoco_point。
+    point 是**末端连杆（右手腕）要到达的点**，不是杯子的几何中心：抓杯身时腕关节就落在
+    离桌面 grasp_height 的位置，见 scene.json 里各条目的 note。
+    """
+
+    id: str
+    label: str
+    furniture: str
+    point: Vec3            # stored 系（physics.ts / three：x 右、y 上、z 朝屏幕外）
+    grasp_height: float    # 抓取点离所在家具顶面的高度，m（写进 note 的同一个数）
+    note: str = ""
+
+    @property
+    def mujoco_point(self) -> Vec3:
+        """stored -> mj：p_mj = (x, -z, y)（与 Box.mujoco_pos 同一个公式）。"""
+        x, y, z = self.point
+        return (x, -z, y)
+
+    @property
+    def frame(self) -> str:
+        return "right_wrist_yaw_link"
+
+
+@dataclass(frozen=True)
 class Scene:
     path: Path
     unit: str
     boxes: tuple[Box, ...]
     agent: dict[str, Any]
+    ik_targets: tuple[IkTarget, ...] = ()
 
     @property
     def spawn_three(self) -> tuple[float, float]:
@@ -95,6 +123,20 @@ class Scene:
         """同一出生点的 MuJoCo 水平坐标 (x, y_mj) = (x, -z_three)。"""
         x, z = self.spawn_three
         return (x, -z)
+
+    def ik_target(self, target_id: str | None = None) -> IkTarget:
+        """按 id 取 IK 目标；None 取第一条（scene.json 的顺序就是默认顺序）。"""
+        if not self.ik_targets:
+            raise KeyError("scene.json 里没有 ik_targets：IK 没有目标点可解")
+        if target_id is None:
+            return self.ik_targets[0]
+        for t in self.ik_targets:
+            if t.id == target_id:
+                return t
+        raise KeyError(
+            f"scene.json 的 ik_targets 里没有 id={target_id!r}"
+            f"（有 {[t.id for t in self.ik_targets]}）"
+        )
 
     def box(self, box_id: str) -> Box:
         for b in self.boxes:
@@ -182,6 +224,44 @@ def load_scene(path: str | Path | None = None) -> Scene:
 
     if not boxes:
         raise ValueError("scene.json: boxes 是空的，场景里至少要有一个盒子")
-    scene = Scene(path=scene_path, unit=unit, boxes=tuple(boxes), agent=agent)
+
+    # P3：IK 目标（可选段；没有它 IK 就是"没有目标点"，照实报错，不拿桌子中心顶上）
+    ik_targets: list[IkTarget] = []
+    seen_ik: set[str] = set()
+    for i, item in enumerate(raw.get("ik_targets") or []):
+        where = f"ik_targets[{i}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"scene.json: {where} 必须是对象")
+        tid = str(item.get("id") or "")
+        if not tid:
+            raise ValueError(f"scene.json: {where} 缺 id")
+        if tid in seen_ik:
+            raise ValueError(f"scene.json: ik_targets id 重复: {tid}")
+        seen_ik.add(tid)
+        furniture = str(item.get("furniture") or "")
+        if furniture:
+            box_ids = {b.id for b in boxes}
+            if furniture not in box_ids:
+                raise ValueError(
+                    f"scene.json: {where}({tid}).furniture={furniture!r} 不在 boxes 里"
+                )
+        ik_targets.append(
+            IkTarget(
+                id=tid,
+                label=str(item.get("label") or tid),
+                furniture=furniture,
+                point=_vec3(item.get("point"), f"{where}({tid}).point"),
+                grasp_height=float(item.get("grasp_height", 0.0)),
+                note=str(item.get("note", "")),
+            )
+        )
+
+    scene = Scene(
+        path=scene_path,
+        unit=unit,
+        boxes=tuple(boxes),
+        agent=agent,
+        ik_targets=tuple(ik_targets),
+    )
     scene.floor()  # 校验地板唯一
     return scene

@@ -372,6 +372,32 @@ MuJoCo 软限位的数值地板（`jnt_solref` 收到 0.002 后仍有 0.0011 rad
 2. 任务达成后**收回自主授权**（`__dbg.setAutonomy(false)`，只收紧不放宽）。不收回时 L4 会继续按下一需求下单，
    而运动层只有纯速度跟踪、没有避障，直线 goto 会在 20–60 s 内撞家具侧翻（`--keep-autonomy` 可复现，水杯/床/冰箱三种都摔过）。
 3. 8787 的 L4 服务没起，意图由页面 `local-fallback` 按同款规则给出（日志里 `provider` 字段自述）——**不冒充满血终端**。
+### 抓取：mink IK（P3 · `sim_server/ik.py`）
+
+第四个模式 `IK`：`settle 0.10 s` → 解（预算 2 s，收敛即停）→ 交 `HOLD` 的同一套位置执行器（kp=500 不动）→
+闭环保持 1.0 s → `RAMP_S` 退场；与 `POLICY` / `MIMIC` 互斥。**不自研 IK**：用 `mink` 的 `FrameTask(right_wrist_yaw_link)`
++ `PostureTask`，并用 `DofFreezingTask` 把浮动基座与腿冻住、只放开腰——不加这条，解出来的姿态会带着整个身体倒。
+
+依赖链（踩过的坑）：`mink 1.4.0` → `qpsolvers 4.13` → **`scipy 1.18.1`（36.6 MB）**；scipy 走默认源经代理时反复断在 16%，
+换 `-i https://mirrors.aliyun.com/pypi/simple/` 后 24 s 装完。`quadprog` / `daqp` 在 cp313 没有 wheel，实际 solver 是 `osqp`（`available_solvers=['osqp']`）。
+注意 `mink.__version__` 这个包**没有导出**，验收要用 `importlib.metadata.version("mink")`。
+
+**实测（2026-11-07 · 本机 · n=1 · `selfcheck --ik`，取 `desk` 顶面杯子点）**
+
+| 指标 | 实测 | 判据 |
+|---|---|---|
+| 末端误差 | **4.54 mm**（到位后 62 帧里最大 3.46 mm 的均值口径见 README） | ≤ 10 mm |
+| 关节越限 | 0 / 29 | 0 |
+| 单次 solve P95 | 2.13 ms（n=134） | ≤ 5 ms |
+| 触发到到位 | 0.580 s | ≤ 2.5 s |
+| 跌倒 | 否（z_min 0.7900） | 不摔 |
+
+**三条负结果（都写在 README 里）**：① 开环执行（只把解写进执行器）末端摆 ±20–45 mm → 保持段每控制帧只放开右臂做 2 次迭代闭环，
+才压到 4.54 mm；② 在进场 ramp 里就闭环会让右肘撞下限位（1 处越限）→ 改成 α≥1 才闭环；③ 腰也进闭环会把身体带倒（z_min 0.07）。
+
+**边界**：站位是用 `place_base_mj` 摆的（桌沿外 0.21 m，与 `--collide` 同一手法），**不是"走过去再抓"**——那要 goto；
+抓取姿态与手部闭合没做（`orientation_cost=0`，夹爪不闭合）。矮桌（顶面 0.32 m）对直立 G1 不可达（腕自肩可达 0.361–0.381 m），
+所以取杯点放在 `desk` 顶面 0.72。
 ## 设计（三层，各管一件事）
 
 | 层 | 位置 | 频率 | 职责 |

@@ -86,6 +86,36 @@ ONNX（HF exptech/g1-moves，CC-BY-4.0，见 policies/g1_mimic.py），不是速
     没有 POLICY 那种「0.5 m/s 的动量必须刹下去」的问题；实测 z 最低点见 selfcheck。
 
 gamma 与判据都不动：POLICY 的 ENTER/EXIT/BRAKE 一个数没改（--walk 复跑必须逐位可比）。
+
+---
+
+## IK（P3）：第四套机构，伸手取物
+
+解算在 ik.py（mink），**本文件只管状态机与交棒**：谁在写关节、什么时候把目标交给位置执行器。
+进场/退场与 MIMIC 同一套骨架，只是没有"动作时间"：
+
+    IK_SETTLE_S = 0.10 s   先在 HOLD 站定再解。比 MIMIC 的 0.5 s 短：HOLD 与 IK 用的**是同一套增益**
+                           （kp=500 的位置执行器），不存在 MIMIC 那种「硬弹簧突然变软」的切换冲击。
+    IK_SOLVE_MAX_S = 2 s   任务书「IK 解 2 s」= 解算的墙钟预算；收敛即停（实测 2 次迭代 / ~5 ms）。
+                           解不动时连续 150 次迭代无改善就放弃（不空烧预算，物理环那 2 s 是停的）。
+    IK_HOLD_S = 1.0 s      到位后保持（这段仍闭环，见下）。
+    退场                   RAMP_S = 0.20 s 的同一套 ramp，把 29 个目标从伸手姿态插回 keyframe stand。
+                           IK **不需要刹车**：原地动作，没有 POLICY 那种 0.5 m/s 的动量（与 MIMIC 同理由）。
+
+**交位置执行器**：解出来的 qpos 只换成 29 个 ctrl 目标，kp/kd **一个数不动**（_act_kp=_hold_kp）。
+所以 IK 期间机器人是「站着、伸一只手」，不是被 IK 直接写力矩 —— 那是跟 HOLD 抢同一条通道。
+
+**保持段为什么是闭环的（实测，不是偏好）**：只把解析解写进执行器（开环），末端在保持段会
+摆 ±20–45 mm —— 腰目标没变，但躯干在踝上慢慢晃（0.5–1 Hz）。所以 reach/hold 两段每控制帧用
+mink 再解 IK_SERVO_ITERS=2 次迭代、**只放开右臂**（腰与腿继续钉在解析解上），把腕压回目标：
+开环 22.6–33.3 mm → 闭环 4.54 mm。两个反例记在这里免得再试：
+
+- 在进场 ramp（alpha<1）里就开始逐帧闭环：mink 从"还站在 stand"的姿态出发，每帧把右肘
+  一路爬到肘关节上限（1.28→2.09 rad，1 处越限）。现在闭环只在 alpha≥1 后跑。
+- 让**腰也进闭环**：会与手臂抢，实测把身体带倒（z_min 0.07）。所以腰在保持段是固定目标。
+
+互斥：IK 与 POLICY / MIMIC 同一时刻只有一套机构写关节。MIMIC 占着关节时 IK 直接拒绝；
+POLICY 在跑时 IK 排队，等回 HOLD 再进场（`_enter_policy` 会把排队清掉：命令优先）。
 """
 
 from __future__ import annotations
@@ -97,6 +127,7 @@ from typing import Any, Callable, Mapping
 import mujoco
 import numpy as np
 
+from .ik import RIGHT_ARM_JOINTS, IkSolver, actuator_targets, frame_point_mj
 from .policies.g1_joystick import CTRL_SUBSTEPS, POLICY_KD, POLICY_KP, G1JoystickPolicy
 from .policies.g1_mimic import G1MimicPolicy
 from .stand import PoseHold
@@ -104,6 +135,7 @@ from .stand import PoseHold
 HOLD = "HOLD"
 POLICY = "POLICY"
 MIMIC = "MIMIC"
+IK = "IK"
 
 CTRL_DT_SIM = CTRL_SUBSTEPS * 0.002      # 一拍控制的仿真时长（0.02 s = 50 Hz）
 
@@ -128,6 +160,15 @@ BRAKE_TAU_S = 0.15
 BRAKE_STOP_LINVEL = 0.05   # 交棒前 pelvis 水平速度必须低于它
 BRAKE_CMD_RAMP_S = 0.40    # 速度命令从「打断前的最后一个运动命令」线性降到 0 的时间
 
+# @own —— IK（P3；判据来自任务书：末端 ≤0.01 m / 到位 ≤2.5 s / solve P95 ≤5 ms）
+IK_SETTLE_S = 0.10         # 先在 HOLD 站定再解；没有增益切换，所以比 MIMIC 的 0.5 s 短
+IK_SOLVE_MAX_S = 2.0       # 任务书「IK 解 2 s」= 解算预算，收敛即提前停（实测 2 次迭代）
+IK_TOL_M = 0.005           # 内部「到位」口径（= 判据 0.01 的一半，留余量）
+IK_ACQUIRE_FRAMES = 5      # 连续这么多控制帧误差 ≤ IK_TOL_M 才算到位（0.1 s）
+IK_HOLD_S = 1.00           # 到位后保持多久再退场
+IK_SERVO_ITERS = 2         # 保持/追踪阶段每控制帧闭环修正的 mink 迭代次数
+IK_RETURN_S = RAMP_S       # 退场走现有 ramp（与 MIMIC 退场同一套，不另写）
+
 
 class ModeController:
     """owns PoseHold + (lazy) G1JoystickPolicy；每物理步写 ctrl，50 Hz 一拍策略。"""
@@ -138,6 +179,7 @@ class ModeController:
         hold: PoseHold | None = None,
         policy_factory: Callable[[Any], G1JoystickPolicy] | None = None,
         mimic_factory: Callable[[Any], G1MimicPolicy] | None = None,
+        ik_factory: Callable[[Any], IkSolver] | None = None,
     ) -> None:
         self.world = world
         self.hold = hold if hold is not None else PoseHold(world)
@@ -160,6 +202,11 @@ class ModeController:
         self._mimic_factory = mimic_factory or (lambda w: G1MimicPolicy(w))
         self.mimic: G1MimicPolicy | None = None
         self.mimic_error: str | None = None
+
+        # IK（P3）：解算器懒加载（mink 只在真的要伸手时才 import/构造）
+        self._ik_factory = ik_factory or (lambda w: IkSolver(w))
+        self.ik_solver: IkSolver | None = None
+        self.ik_error: str | None = None
 
         # 主动模式的增益（POLICY 是 75/2 的标量，MIMIC 是逐关节的训练增益）
         self._act_kp = np.full(m.nu, POLICY_KP, dtype=float)
@@ -191,6 +238,23 @@ class ModeController:
         self._mimic_frame = 0
         self._mimic_play_s = 0.0
         self._mimic_ctrl_frames = 0
+        # IK 的四段相位：idle → settle（HOLD 站定）→ reach（解完、追目标）→ hold（保持）
+        #               + exit（回 HOLD 的 ramp，与 MIMIC 退场同一套）
+        self._ik_phase = "idle"
+        self._ik_want = False
+        self._ik_t = 0.0
+        self._ik_target_id: str | None = None
+        self._ik_plan = None
+        self._ik_servo: IkSolver | None = None
+        self._ik_base_ctrl: np.ndarray | None = None
+        self._ik_arm_idx: list[int] = []
+        self._ik_frames_ok = 0
+        self._ik_trigger_time: float | None = None
+        self._ik_reach_time: float | None = None
+        self._ik_err_m = float("nan")
+        self._ik_servo_solve_ms: list[float] = []
+        self._ik_servo_failed = 0
+        self._ik_servo_fallback = 0
         self.reset()
 
     # ---------- 生命周期 ----------
@@ -217,6 +281,20 @@ class ModeController:
         self._mimic_frame = 0
         self._mimic_play_s = 0.0
         self._mimic_ctrl_frames = 0
+        self._ik_phase = "idle"
+        self._ik_want = False
+        self._ik_t = 0.0
+        self._ik_plan = None
+        self._ik_servo = None
+        self._ik_base_ctrl = None
+        self._ik_arm_idx = []
+        self._ik_frames_ok = 0
+        self._ik_trigger_time = None
+        self._ik_reach_time = None
+        self._ik_err_m = float("nan")
+        self._ik_servo_solve_ms = []
+        self._ik_servo_failed = 0
+        self._ik_servo_fallback = 0
         self.policy_error = None
         self.mimic_error = None
         self.step_counter = 0
@@ -376,6 +454,188 @@ class ModeController:
         self._mimic_phase = "exit"
         self._mimic_want = False
 
+    # ---------- IK 生命周期（P3） ----------
+
+    def start_ik(self, target: str | None = None) -> None:
+        """请求「伸手取物」：HOLD 站定 → mink 解 → 交位置执行器 → 保持 → 回 HOLD。
+
+        与 POLICY / MIMIC **互斥**：
+        - MIMIC 正占着关节（settle/ramp/play）→ 直接拒绝，记 ik_error（不抢、不排队，
+          因为 MIMIC 是一段有结局的动作，抢它没有意义）；
+        - POLICY 在跑 → 排队等回 HOLD；回 HOLD 后如果客户端又给了速度命令，命令优先
+          （_enter_policy 会把 _ik_want 清掉），不会突然伸手。
+        """
+        self._ik_target_id = target
+        self.ik_error = None
+        if self.mode == MIMIC or self._mimic_phase in ("settle", "ramp", "play"):
+            self._ik_want = False
+            self.ik_error = "MIMIC 正在占用关节：IK 与 MIMIC 互斥（等它退回 HOLD 再发 ik）"
+            return
+        self._ik_want = True
+        if self.mode == HOLD and self._ik_phase == "idle":
+            self._ik_begin()
+
+    def stop_ik(self) -> None:
+        """客户端取消：正在伸手就走退场 ramp，没开始就清掉排队请求。"""
+        self._ik_want = False
+        if self.mode == IK or self._ik_phase in ("settle", "reach", "hold"):
+            self._ik_exit()
+
+    @property
+    def ik_reaching(self) -> bool:
+        return self._ik_phase in ("settle", "reach", "hold")
+
+    @property
+    def ik_done(self) -> bool:
+        """整段 IK 结束且已经回到 HOLD（alpha 归零）。"""
+        return self._ik_phase == "idle" and not self._ik_want and self.mode == HOLD
+
+    @property
+    def ik_plan(self):
+        return self._ik_plan
+
+    @property
+    def ik_err_m(self) -> float:
+        """当前末端位置误差（m，mj 系直线距离）；没伸手时为 nan。"""
+        return self._ik_err_m
+
+    @property
+    def ik_time_to_reach_s(self) -> float | None:
+        """start_ik 到「连续 5 帧误差 ≤ IK_TOL_M」的仿真秒数；没到位为 None。"""
+        if self._ik_trigger_time is None or self._ik_reach_time is None:
+            return None
+        return self._ik_reach_time - self._ik_trigger_time
+
+    def _ik_begin(self) -> None:
+        self._ik_want = False
+        self._ik_phase = "settle"
+        self._ik_t = 0.0
+        self._ik_frames_ok = 0
+        self._ik_plan = None
+        self._ik_reach_time = None
+        self._ik_trigger_time = float(self.world.data.time)
+        self._ik_servo_solve_ms = []
+        self._ik_servo_failed = 0
+        self._ik_servo_fallback = 0
+        self._ik_err_m = float("nan")
+
+    def try_load_ik(self) -> IkSolver | None:
+        """运行时用：mink 装不上 / 场景没目标点，只报一次，不动物理环。"""
+        if self.ik_solver is not None:
+            return self.ik_solver
+        if self.ik_error is not None:
+            return None
+        try:
+            self.ik_solver = self._ik_factory(self.world)
+        except Exception as exc:  # noqa: BLE001 —— 依赖/目标点问题要如实报，但只报一次
+            self.ik_error = f"{type(exc).__name__}: {exc}"
+            return None
+        return self.ik_solver
+
+    def _ik_settle_tick(self) -> None:
+        """HOLD 站定 IK_SETTLE_S 后：解一次（≤2 s 预算）→ 交位置执行器。"""
+        self._ik_t += CTRL_DT_SIM
+        if self._ik_t < IK_SETTLE_S:
+            return
+        solver = self.try_load_ik()
+        if solver is None:
+            self._ik_phase = "idle"
+            return
+        try:
+            plan = solver.solve(max_s=IK_SOLVE_MAX_S, tol=IK_TOL_M)
+        except Exception as exc:  # noqa: BLE001
+            self.ik_error = f"{type(exc).__name__}: {exc}"
+            self._ik_phase = "idle"
+            return
+        self._ik_plan = plan
+        if not plan.converged:
+            # 解不出来就老实待在 HOLD，不拿"差不多"的姿态去充数
+            self.ik_error = (
+                f"mink 解算 {plan.wall_s * 1000:.0f} ms / {plan.iters} 次迭代未收敛："
+                f"末端残差 {plan.err_m * 1000:.2f} mm > {IK_TOL_M * 1000:g} mm"
+            )
+            self._ik_phase = "idle"
+            return
+
+        # 交位置执行器：目标 = 解出来的姿态；**增益一点不动**（HOLD 的 kp=500 就是执行器，
+        # 伸一只手不该换刚度）。腿与左臂在解里本来就是 stand（等约束冻住），所以 Ctrl 上
+        # 只有右臂（和腰）离开 keyframe。
+        self._act_kp = self._hold_kp.copy()
+        self._act_kd = self._hold_kd.copy()
+        self._ik_base_ctrl = actuator_targets(self.world, self.hold, plan.q)
+        self._act_tgt = self._ik_base_ctrl.copy()
+        self._ik_arm_idx = [self.hold.actuator_index[n] for n in RIGHT_ARM_JOINTS]
+        # 保持/追踪阶段的闭环：只放开右臂（腰与腿继续钉在解出来的目标上）。
+        # 为什么要闭环，见模块 docstring 的 IK 一节 —— 开环执行实测摆 ±20-45 mm。
+        self._ik_servo = IkSolver(self.world, target=solver.target, free_joints=RIGHT_ARM_JOINTS)
+        self._ramp_s = RAMP_S
+        self.mode = IK
+        self._ik_phase = "reach"
+        self._ik_frames_ok = 0
+        self.switches += 1
+
+    def _ik_tick(self) -> None:
+        """IK 的一次控制帧：闭环修正右臂目标 → 判到位 → 保持 IK_HOLD_S → 退场。"""
+        if self._ik_servo is None or self._ik_plan is None or self._ik_base_ctrl is None:
+            self._ik_exit()
+            return
+        # 进场 ramp 没走完（alpha<1）时**不跑闭环**：这一步的职责是把执行器目标从 stand
+        # 线性插到解析解，让机构自己走过去。实测：在 alpha<1 时就开始逐帧闭环，mink 会从
+        # "还站在 stand" 的姿态出发、每帧 2 次迭代把右肘一路爬到肘关节上限（1.28→2.09 rad，
+        # 触发 1 处越限）—— 那是拿差分 IK 当轨迹规划用，不是纠偏。
+        step = None
+        if self.alpha >= 1.0:
+            try:
+                step = self._ik_servo.solve(max_s=CTRL_DT_SIM, tol=1e-4, max_iters=IK_SERVO_ITERS)
+            except Exception:  # noqa: BLE001 —— 单帧解不出来就沿用上一帧目标，不把物理环带崩
+                step = None
+        if step is not None:
+            self._ik_servo_failed += step.failed
+            self._ik_servo_fallback += step.no_limit_fallback
+        if step is not None and step.failed == 0:
+            self._ik_servo_solve_ms.extend(step.solve_ms)
+            ctrl = np.array(self._ik_base_ctrl, dtype=float)
+            ctrl[self._ik_arm_idx] = [
+                step.q[self.world.joint_qpos_adr[n]] for n in RIGHT_ARM_JOINTS
+            ]
+            self._act_tgt = np.clip(ctrl, self._lo, self._hi)
+
+        self._ik_err_m = self._measure_ik_err()
+        if self._ik_phase == "reach":
+            if self._ik_err_m <= IK_TOL_M:
+                self._ik_frames_ok += 1
+            else:
+                self._ik_frames_ok = 0
+            if self._ik_frames_ok >= IK_ACQUIRE_FRAMES:
+                self._ik_phase = "hold"
+                self._ik_t = 0.0
+                self._ik_reach_time = float(self.world.data.time)
+        else:
+            self._ik_t += CTRL_DT_SIM
+            if self._ik_t >= IK_HOLD_S:
+                self._ik_exit()
+
+    def _measure_ik_err(self) -> float:
+        if self._ik_plan is None:
+            return float("nan")
+        return float(
+            np.linalg.norm(frame_point_mj(self.world) - np.asarray(self._ik_plan.point_mj))
+        )
+
+    def _ik_exit(self) -> None:
+        """退场 = 回 HOLD 的同一套 ramp（目标从解出来的姿态线性归位 + alpha 1→0）。
+
+        IK 不需要刹车（和 MIMIC 同理：伸手是原地动作，没有 POLICY 那种 0.5 m/s 的动量），
+        但**必须**用 ramp 把 29 个目标从"伸手姿态"插值回 keyframe stand，不许瞬跳。
+        """
+        if self.mode == IK:
+            self.switches += 1
+        self.mode = HOLD
+        self._ramp_s = IK_RETURN_S
+        self._ik_phase = "exit"
+        self._ik_want = False
+        self._ik_servo = None
+
     # ---------- 推进 ----------
 
     def advance(self, n_physics: int = 1) -> None:
@@ -405,16 +665,25 @@ class ModeController:
 
         if self.mode == HOLD:
             if want:
-                # 有速度命令：MIMIC 让路；还在退场 ramp 里就等 alpha 归零再交棒 POLICY
+                # 有速度命令：MIMIC / IK 让路；还在退场 ramp 里就等 alpha 归零再交棒 POLICY
                 if self._mimic_phase in ("settle", "ramp", "play"):
                     self._mimic_exit()
-                if self._mimic_phase == "idle":
+                if self._ik_phase in ("settle", "reach", "hold"):
+                    self._ik_exit()
+                if self._mimic_phase == "idle" and self._ik_phase == "idle":
                     self._enter_policy()
             elif self._mimic_phase == "exit":
                 if self.alpha <= 0.0:
                     self._mimic_phase = "idle"
+            elif self._ik_phase == "exit":
+                if self.alpha <= 0.0:
+                    self._ik_phase = "idle"
             elif self._mimic_phase == "settle":
                 self._mimic_settle_tick()
+            elif self._ik_phase == "settle":
+                self._ik_settle_tick()
+            elif self._ik_phase == "idle" and self._ik_want and self._mimic_phase == "idle":
+                self._ik_begin()          # POLICY 期间排的队：回 HOLD 才进场
         elif self.mode == POLICY:
             if want:
                 self.braking = False          # 刹车中又给命令：取消刹车，直接走
@@ -446,12 +715,18 @@ class ModeController:
                 self._mimic_exit()            # 速度命令抢走：走同一套退场 ramp
             else:
                 self._mimic_tick()
+        elif self.mode == IK:
+            if want:
+                self._ik_exit()               # 速度命令抢走：同一套退场 ramp（IK 与 POLICY 互斥）
+            else:
+                self._ik_tick()
 
         if (
             self.mode == HOLD
             and self.alpha > 0.0
             and self.policy is not None
             and self._mimic_phase == "idle"
+            and self._ik_phase == "idle"
             and not self.legacy_handover
         ):
             # P5 第 3 段：交接 ramp 期间**不冻结**策略目标 —— 让策略继续原地踏步
@@ -494,6 +769,7 @@ class ModeController:
         pol = self.try_load_policy()
         if pol is None:
             return                        # 权重不可用：老实待在 HOLD，别装成能走
+        self._ik_want = False             # 速度命令优先：排队的 IK 请求作废，不许走着走着突然伸手
         pol.reset()                       # last_action=0 / phase=[0,π]：干净起步
         self._act_tgt = pol.stand_targets()
         self._act_kp = np.full(self.world.model.nu, POLICY_KP, dtype=float)
@@ -528,7 +804,7 @@ class ModeController:
         warnings.warn(msg, RuntimeWarning, stacklevel=2)
 
     def _ramp(self, dt: float) -> None:
-        target = 1.0 if self.mode in (POLICY, MIMIC) else 0.0
+        target = 1.0 if self.mode in (POLICY, MIMIC, IK) else 0.0
         step = dt / max(self._ramp_s, 1e-9)
         if self.alpha < target:
             self.alpha = min(target, self.alpha + step)
@@ -613,4 +889,36 @@ class ModeController:
             "mimic_frame": self._mimic_frame,
             "mimic_ctrl_frames": self._mimic_ctrl_frames,
             "mimic_play_s": round(self._mimic_play_s, 3),
+            # IK（P3）
+            "ik_phase": self._ik_phase,
+            "ik_target": (
+                self._ik_plan.target.id if self._ik_plan is not None
+                else self._ik_target_id
+            ),
+            "ik_err_m": (
+                None if not math.isfinite(self._ik_err_m) else round(self._ik_err_m, 5)
+            ),
+            "ik_err_mm_plan": (
+                None if self._ik_plan is None else round(self._ik_plan.err_m * 1000.0, 2)
+            ),
+            "ik_iters": None if self._ik_plan is None else self._ik_plan.iters,
+            "ik_solve_p50_ms": (
+                None if self._ik_plan is None else round(self._ik_plan.p50_ms, 3)
+            ),
+            "ik_solve_p95_ms": (
+                None if self._ik_plan is None else round(self._ik_plan.p95_ms, 3)
+            ),
+            "ik_servo_n": len(self._ik_servo_solve_ms),
+            "ik_servo_failed": self._ik_servo_failed,
+            "ik_servo_fallback": self._ik_servo_fallback,
+            "ik_servo_p95_ms": (
+                round(float(np.percentile(self._ik_servo_solve_ms, 95.0)), 3)
+                if self._ik_servo_solve_ms else None
+            ),
+            "ik_time_to_reach_s": (
+                None if self.ik_time_to_reach_s is None
+                else round(self.ik_time_to_reach_s, 3)
+            ),
+            "ik_hold_s": IK_HOLD_S,
+            "ik_error": self.ik_error,
         }
