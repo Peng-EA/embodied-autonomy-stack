@@ -28,6 +28,13 @@
 
 ### Added
 
+- **L2 仲裁器（P1a，未接线）**：新增 [`sim/l2_reflex/arbiter.py`](sim/l2_reflex/arbiter.py) +
+  [`sim/test_arbiter.py`](sim/test_arbiter.py)（5 组 / 205 checks，纯 stdlib，无 pytest）。
+  把"锁存 → 解除确认窗 → 保持 → 斜坡恢复"固化成状态机：反射消失**不等于**交还持权，
+  须连续消失 `RELEASE_CONFIRM_S` 才进 `hold`。三个时长常数拆开（默认 0.30 / 0.30 / 0.50 s，
+  **均为未标定起点值**）；`authority` 现查 `sim/config.py` 的 `PRIORITY`，不留数字副本。
+  反向验证：确认窗归零 → T2/T3/T5 红；保持窗归零 → T3/T5 红；复原后 md5 一致、EXIT=0。
+  **未接线**：`sim.main` / `sim_server` / 既有基线数字一行未动。
 - **仲裁顺序落码（P0）**：`sim/config.py` 新增 `PRIORITY` / `PRIORITY_ORDER`——六档固定优先级
   （硬件急停 > L1 生存 > L2B 硬反射 > L3 用户 > L4 规划 > L2A 技能），**只定冲突归属、不含任何时延**。
   新增 `checks/check-priority.mjs`：键集合一致、权重互异、降序与权威序一致、无负权重，
