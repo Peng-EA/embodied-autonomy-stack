@@ -47,17 +47,23 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
+import os
 import sys
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
+import mujoco
+import numpy as np
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from sim.env.g1_modes import ModeController
 from sim.env.g1_sim import PoseHold, STEPS_PER_TICK, TICK_HZ, World
+from sim.memory.store import Blackboard, Registers, Ring, Token
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8788
@@ -71,6 +77,58 @@ CORS_ANY = {
 }
 # 端点等 tick 边界的上限：物理环正常时是 1 个 tick（16 ms），等不到就是环停了，必须报出来
 RESET_WAIT_MAX_S = 2.0
+
+# ---- P2b：L1 记忆三件套接进 60 Hz 环（sim/memory/store.py）----
+# 分工写死，别挪：**写路径只在物理 tick 里**（REG.write 只写 float、RING.push 一条元组），
+# **磁盘 IO 只在 flush_loop 里**（每 50 ms 一次 drain + JSONL）。判据/阈值一个没动，
+# p95 与 dropped 由 testbed 探针量，这里不自己放宽任何数。
+MEM_FLUSH_PERIOD_S = 0.05     # flush_loop 周期
+MEM_RING_CAPACITY = 256       # 256 条 / 60 Hz ≈ 4.3 s 的缓冲，够跨一次 50 ms 落盘抖动
+
+# 仓库根的 .tmp/mem（.tmp 已在 .gitignore；按进程分文件，多开不打架）
+MEM_DIR = Path(__file__).resolve().parents[1] / ".tmp" / "mem"
+MEM_REG_NAMES = ("tSim", "mode_code", "x", "y", "z", "yaw", "speed", "contacts", "ticks")
+MEM_MODE_CODES = {"HOLD": 0.0, "POLICY": 1.0, "MIMIC": 2.0, "IK": 3.0}
+
+REG = Registers(MEM_REG_NAMES)
+RING = Ring(MEM_RING_CAPACITY)
+BB = Blackboard()
+# Token 示例：快环只读凭据（frozen dataclass，改字段直接抛）
+TOKEN = Token(skill_id="sim_server.telemetry", phase="P2b", seq=0)
+
+# 采样用的预分配缓冲：构造期分配，tick 内不再 np.zeros
+_MEM_R9 = np.zeros(9, dtype=float)
+_MEM_VEL6 = np.zeros(6, dtype=float)
+
+
+class FlushState:
+    """flush_loop 的落盘进度 —— /health 的 mem.flushed 读这里（只慢路径写）。"""
+
+    __slots__ = ("flushed", "path", "err")
+
+    def __init__(self) -> None:
+        self.flushed = 0
+        self.path = MEM_DIR / f"telemetry-{os.getpid()}.jsonl"
+        self.err: str | None = None
+
+
+FLUSH = FlushState()
+
+
+def _mem_health() -> dict[str, Any]:
+    """/health 的 mem 段：三个计数 + 环形队列容量 + 黑板 seq（读路径，允许分配）。"""
+    stats = RING.stats()
+    seq, _snap = BB.read()
+    return {
+        "pushed": stats["pushed"],
+        "dropped": stats["dropped"],
+        "capacity": stats["capacity"],
+        "flushed": FLUSH.flushed,
+        "bb_seq": seq,
+        "queued": len(RING),
+        "file": str(FLUSH.path),
+        "err": FLUSH.err,
+    }
 
 
 def _r6(v: float) -> float:
@@ -211,6 +269,37 @@ class SimRuntime:
         self.mode.advance(STEPS_PER_TICK)
         self.contacts = int(self.world.data.ncon)
         self.ticks += 1
+        # P2b：记忆写路径。只写 float / 一条元组，不格式化、不 json、不落盘。
+        self.mem_sample()
+
+    def mem_sample(self) -> None:
+        """把一个 tick 的状态写进 REG / RING —— 写路径不建对象、不做字符串格式化。
+
+        坐标映射与 World.state 一致（three 系：x=qpos[0], y=qpos[2], z=-qpos[1]；
+        yaw=atan2(R[1,0], R[0,0])，speed 取 pelvis 世界系水平线速度）。这里**不调**
+        World.state()：它每 tick 会新建几个 numpy 数组 + 29 关节 dict，那笔分配不属于
+        记忆路径，也不该被算成它的成本。quat2Mat / objectVelocity 写进预分配缓冲。
+        """
+        d = self.world.data
+        mujoco.mju_quat2Mat(_MEM_R9, d.qpos[3:7])
+        mujoco.mj_objectVelocity(
+            self.world.model, d, mujoco.mjtObj.mjOBJ_BODY, self.world.pelvis_id, _MEM_VEL6, 0
+        )
+        t = float(d.time)
+        mode_code = MEM_MODE_CODES.get(self.mode.mode, -1.0)
+        x = float(d.qpos[0])
+        y = float(d.qpos[2])
+        z = float(-d.qpos[1])
+        REG.write("tSim", t)
+        REG.write("mode_code", mode_code)
+        REG.write("x", x)
+        REG.write("y", y)
+        REG.write("z", z)
+        REG.write("yaw", math.atan2(_MEM_R9[3], _MEM_R9[0]))
+        REG.write("speed", math.hypot(_MEM_VEL6[3], _MEM_VEL6[4]))
+        REG.write("contacts", float(self.contacts))
+        REG.write("ticks", float(self.ticks))
+        RING.push((t, mode_code, x, y, z))
 
     def snapshot(self, full: bool = False) -> dict[str, Any]:
         s = self.world.state()
@@ -314,6 +403,42 @@ async def sim_loop(rt: SimRuntime, hub: Hub) -> None:
             next_at = time.perf_counter()  # 落后就重新对齐，不追帧
 
 
+async def flush_loop() -> None:
+    """每 MEM_FLUSH_PERIOD_S 把 RING 里的记录落成 JSONL —— **磁盘 IO 只在这里**。
+
+    物理环只 push，不碰文件；所以落盘再慢（杀毒扫描、机械盘）也反压不到 60 Hz 环：
+    最坏情况是 RING 被写满、最旧的记录被覆盖并记进 dropped，物理环照样按时 tick。
+    flushed 是**真的写进文件的记录条数**（= 文件行数），不是「我打算写多少」。
+    """
+    MEM_DIR.mkdir(parents=True, exist_ok=True)
+    fh = open(FLUSH.path, "a", encoding="utf-8")
+    try:
+        while True:
+            await asyncio.sleep(MEM_FLUSH_PERIOD_S)
+            records = RING.drain()
+            if records:
+                try:
+                    fh.write(
+                        "\n".join(json.dumps(r, separators=(",", ":")) for r in records) + "\n"
+                    )
+                    fh.flush()
+                    FLUSH.flushed += len(records)
+                except OSError as exc:      # 磁盘坏了也不许把物理环/服务拖死
+                    FLUSH.err = repr(exc)
+            # 黑板是单写者：只有这里 publish（慢路径），/health 只 read()
+            stats = RING.stats()
+            BB.publish(
+                {
+                    "flushed": FLUSH.flushed,
+                    "pushed": stats["pushed"],
+                    "dropped": stats["dropped"],
+                    "tSim": REG.read("tSim"),
+                }
+            )
+    finally:
+        fh.close()
+
+
 def create_app(runtime: SimRuntime | None = None, tick_hz: float = TICK_HZ) -> FastAPI:
     rt = runtime if runtime is not None else SimRuntime(tick_hz=tick_hz)
     hub = Hub()
@@ -321,14 +446,18 @@ def create_app(runtime: SimRuntime | None = None, tick_hz: float = TICK_HZ) -> F
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         task = asyncio.create_task(sim_loop(rt, hub))
+        # P2b：落盘协程与物理环**分开**调度——磁盘慢只会让 RING 满，不会卡 tick
+        flusher = asyncio.create_task(flush_loop())
         try:
             yield
         finally:
             task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+            flusher.cancel()
+            for t in (task, flusher):
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
 
     app = FastAPI(title="sim_server", version="0.1.0", lifespan=lifespan)
 
@@ -361,6 +490,8 @@ def create_app(runtime: SimRuntime | None = None, tick_hz: float = TICK_HZ) -> F
             # D2：复位计数（/reset 成功一次 +1）与排队中的复位请求
             "resets": rt.reset_count,
             "pending_reset": rt.pending_reset,
+            # P2b：L1 记忆三件套的运行时计数（写路径在 tick，落盘在 flush_loop）
+            "mem": _mem_health(),
             # P2a：动作通道（mimic）的进度；不加载权重时为 None
             "mimic": {
                 "phase": rt.mode.info()["mimic_phase"],

@@ -30,6 +30,12 @@
 
 ### Added
 
+- **记忆三件套接进 60 Hz 环（P2b2）**：`sim_server/app.py` 的物理 tick 末尾 `mem_sample()` 写 9 个寄存器 +
+  push 一条元组；磁盘 IO 隔离到独立的 50 ms `flush_loop`（`.tmp/mem/telemetry-<pid>.jsonl`）。
+  `/health` 增 `mem` 段（原 17 键未删）。实测：`probe-ws --seconds 60` → frames 3599、**dropped=0**、
+  hz 60.0、**p95 1.83 ms**（接线前 2.20，未退化）；`/health` pushed 283→587 而 dropped=0、`flushed = pushed − queued`；
+  `selfcheck --seconds 30` 的 1.3222 m / 0.0002 m / 60.0 Hz 三条一条未变。
+  反向验证：环容量改 1 → `dropped` 迅速上涨；`flush_loop` 提前 return → `flushed` 停在 0 且文件不存在。
 - **记忆三件套（P2a，未接线）**：新增 `sim/memory/`（`Registers` / `Blackboard` / `Ring` / `Token`）+
   `sim/test_memory.py`（5 组 / 55 checks，纯 stdlib）。设计前提写在模块 docstring 里：**记忆不是一个层**——
   L1 只放"定长、高频、写路径不分配"的寄存器；任务进度走单写者黑板（先造不可变快照再单次换引用，读侧无锁无撕裂）；

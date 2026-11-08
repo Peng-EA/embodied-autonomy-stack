@@ -215,6 +215,32 @@ left_knee 推过限位 2e-3 rad 后 QP infeasible），兜底是当步退成"只
 末端误差 **4.54 mm**、关节越限 **0**、单次 solve p95 **2.2–2.6 ms**（n=134）、触发到到位 **0.580 s**、
 不摔（z_min 0.7900）→ **五项全绿**。解算本身只用了 **2 次** mink 迭代、6.5 ms 墙钟（`plan_err` 2.92 mm）。
 
+## 2e. 记忆三件套接进 60 Hz 环（P2b2）
+
+`sim/memory/store.py` 的四个对象接进物理环（2026-11-08）：每个 tick 末尾 `mem_sample()` 写 9 个寄存器 +
+push 一条 `(tSim, mode_code, x, y, z)` 元组；**磁盘 IO 全在独立的 50 ms `flush_loop` 里**，落
+`.tmp/mem/telemetry-<pid>.jsonl`。写路径不建 dict、不 `json.dumps`、不做字符串格式化——那些分配都在落盘任务里。
+
+`/health` 新增 `mem` 段（原有 17 个键一个没删）：
+
+| 键 | 含义 |
+|---|---|
+| `pushed` / `flushed` | 累计入环 / **真的写进文件**的条数（后者由落盘驱动，不是"打算写多少"） |
+| `dropped` / `capacity` / `queued` | 被覆盖的最旧条数 / 环容量 256 / 当前积压 |
+| `bb_seq` | 黑板发布序号（单写者慢路径） |
+| `file` / `err` | 落盘路径 / 最近一次写盘异常（正常为 `null`） |
+
+判据（本机实测，n=1）：
+
+- `node testbed/scripts/probe-ws.mjs --seconds 60` → frames **3599**、**dropped=0**、hz 60.0、**p95 1.83 ms**（接线前 2.20）——没退化。
+- `/health` 两次取样（隔 5 s）：pushed **283→587**（≈61/s）、dropped=0、`flushed` 恒等于 `pushed − queued`。
+- `selfcheck --seconds 30`：height **1.3222**、drift **0.0002 m**、tick **60.0 Hz**，一条没变。
+- 反向验证：环容量临时改 1 → `dropped` 迅速上涨；`flush_loop` 直接 return → `flushed` 停在 0 且文件不存在。
+  这两条说明计数不是装饰品（前一条证明覆盖真的被数，后一条证明 `flushed` 真由写盘驱动）。
+
+**边界**：JSONL 是 append 打开的，pid 被复用时行数会跨进程累加——所以"行数 == flushed"只在
+同 pid 单独跑时成立（本机已遇到，别拿行数当第二真值）。
+
 ## 3. WS 协议（`ws://127.0.0.1:8788/sim`）
 
 C → S（随时发，覆盖上一条）：
