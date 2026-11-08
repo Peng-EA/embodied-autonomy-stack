@@ -46,6 +46,17 @@
   > 变量清单是**提案**，需在仿真里标定后再定稿——见下方 TBD 表。
 - 设定点：每个变量有目标区间；偏离程度归一化为 0–1 的 `severity`。
 - 输出：`homeostatic_broadcast`（可抢占全局），见 [interfaces.md](interfaces.md)。
+
+**记忆怎么放（2026-11-08 裁定）**：记忆**不是一个层**。L1 只放「寄存器」——高频、定长、写路径不分配内存；
+任务进度这类语义状态放「单写者黑板」，L1 只读一个轻量令牌（`skill_id` / `phase` / `seq`）；长期经验留在 L4。
+实现：[`sim/memory/store.py`](../sim/memory/store.py)（`Registers` / `Blackboard` / `Ring` / `Token`），
+自检 `python -m sim.test_memory`。
+
+- 实测（本机 1 s 压测，n=1）：写 475k–486k 次，p50 **0.30 µs** / p99 **0.60 µs**，gc 0 次；
+  环 `dropped` 与 `pushed − capacity` 逐数对上。
+- `gc=0` 怎么来的：gen0 触发看的是「存活容器数净增」，快照被下一次发布立即替换、旧对象全靠引用计数释放，
+  净增到不了阈值——不是把 gc 关了（测试里断言了 `gc.isenabled()`）。
+- 边界：`snapshot()` 会分配元组（慢路径）；传 int 会先造一个临时 float；frozen 令牌挡的是误写，不是安全边界。
 - **只实现内感受的 homeostatic 分支**：allostatic（按不确定性在偏离发生前重评估设定点）**未实现**，
   因此本层严格说是"稳态层"而不是完整的"内感受层"。理由与回来做的条件见
   [ADR-0004](adr/0004-l1-homeostatic-only.md)。

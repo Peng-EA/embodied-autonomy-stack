@@ -30,6 +30,14 @@
 
 ### Added
 
+- **记忆三件套（P2a，未接线）**：新增 `sim/memory/`（`Registers` / `Blackboard` / `Ring` / `Token`）+
+  `sim/test_memory.py`（5 组 / 55 checks，纯 stdlib）。设计前提写在模块 docstring 里：**记忆不是一个层**——
+  L1 只放"定长、高频、写路径不分配"的寄存器；任务进度走单写者黑板（先造不可变快照再单次换引用，读侧无锁无撕裂）；
+  快环→落盘用固定容量环形队列（覆盖最旧并计 `dropped`，落盘再慢也不反压实时环）。
+  实测（n=1，1 s）：publish 475k–486k 次，写 p50 **0.30 µs** / p99 **0.60 µs**，gc 0 次；
+  Registers 写 200000 次 tracemalloc 峰值 **+48 B**、当前 +0 B。
+  反向验证：Ring 改无界 append → T2 红（dropped=0、len=1000）；Blackboard 改两次赋值 → T3 红（撕裂 757 次）。
+  **未接线**：`sim.main` / `sim_server` 一行未动。
 - **退出码语义修对（P1c）**：`sim/main.py` 抽纯函数 `exit_code_for(*, fell, dt_ok)`——0 = 跑完且时间基 PASS 且未摔；
   1 = 摔了或时间基 FAIL；2 仍归参数/能力错误。**旧判据 `return 0 if l4.decisions else 1` 是错的**：
   人形 6 s 里大部分时间站着（`decisions=0`），于是一条完全正常的运行退出码为 1（实测既存，非新引入）。
