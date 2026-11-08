@@ -23,6 +23,8 @@
 - **走路**（`selfcheck --walk`）：30 s 平均 **0.5733 m/s**、累计 **16.0157 m**、关节越限 0、未摔、
   推理 p95 0.053 ms（n=2059）、`hold→policy→hold` 切换未摔。
 - **动作**（`selfcheck --mimic`，`bonus/B_HandsUp`）：441 帧 / 8.816 s、越限 0、回 HOLD 0.208 s、p95 0.056 ms。
+  **⚠ 这条 PASS 只观察到退场瞬间，不能当「动作安全」的证据**：P3-f 把观察窗延到退场后 3 s 后，
+  同一段动作在**退场后 1.12 s 摔倒**（z_min **0.0649**），机制与复现见 [ADR-0009](docs/adr/0009-action-exit-settle.md)。
 - **IK**（`selfcheck --ik`，`desk_cup`）：规划误差 2.92 mm、末端 **4.54 mm**、solve p95 **1.32 ms**、
   触发到到位 0.580 s、越限 0、未摔。
 - **演示台**（`demo-check.mjs`）：布局 26/26 ×2 视口、摄像机 18/18、console 错误 0、`verdict=pass`；
@@ -30,6 +32,15 @@
 
 ### Added
 
+- **动作退场复现 + ADR-0009（P3-f，代码零改动）**：在外部脚本里压掉/拉长 MIMIC 退场 ramp 并**观察退场后 3 s**，
+  结论三条：① **默认 RAMP_S=0.20 也会摔**（z_min **0.0649**，退场后 **1.12 s** 倒）；
+  ② 时长不是变量（0.05→10 s 全都摔）；③ 另有 2 段 clip 怎么退都不摔（B_HandsChop / J_Dance0，如实报）。
+  **机制**：退场目标用的是 keyframe stand，与片尾站姿腿部差 0.11–0.24 rad，插值把左脚抬离地 0.129–0.220 m 且不再落地 →
+  单脚支撑 + HOLD 无平衡控制 → 倾角 1.7°→57° 单调涨。退场那一帧「看着稳」（速度 0.035、双脚 273/122 N、倾角 1.65°），
+  所以任何「切换瞬间采样一次」的 settle 门都会误开。
+  **同时暴露一个假 PASS**：`--mimic` 在 `mode.mimic_done`（alpha 归零，t=10.12 s）就 break，最低点 0.0649 在 t=11.04 s——
+  观察窗把摔倒截掉了。已在本文与 README 更正，修窗属下一片。
+  产物：[ADR-0009](docs/adr/0009-action-exit-settle.md)（草案，3 候选 + 5 条可判死闸 + 3 个已否方案）。
 - **仲裁器常数标定：网格内无可行解（P3-e）**：12 格（confirm×hold×ramp）× 胶囊 seed7–11 + G1 复核，结果照实报「无可行解」，
   **默认值 0.30/0.30/0.50 一个 bit 未动**。结构性张力：胶囊要「短」（≤0.70 才不超 +0.5 s 到桩），G1 要「长」（只有 1.10 档 0/5 摔）。
   **正向发现**：窗口越短越容易摔——压到 0.45 s 时 G1 5 次里 1 次摔（z_min 0.0428，PM 已独立复现）。
@@ -156,7 +167,7 @@
   新增 `selfcheck --mimic-clip <clip>`（不认识就 exit 2 并列出可用 clip）与 `--mimic-candidates`
   （逐段跑并打候选表；判据只有一份实现，两个入口共用）。默认 clip 441 帧 / 8.82 s 实测（n=1）：
   frames 441、joint_out_of_limit 0、z_min 0.7766、fell False、return_to_hold_s 0.208、infer_p95 0.228 ms
-  → **七项全绿 exit 0**。候选表：B_HandsUp PASS（选为默认）/ V_Rocamena FAIL（3 处越限 + 摔，z_min 0.0606）/
+  → **七项全绿 exit 0**（⚠ 同上：观察窗止于 alpha 归零，退场后的摔倒不在窗口内，见 ADR-0009）。候选表：B_HandsUp PASS（选为默认）/ V_Rocamena FAIL（3 处越限 + 摔，z_min 0.0606）/
   B_HandsChop PASS（35.3 s，只作对照）/ dance J_Dance0_StepTouch FAIL（1 处 waist_roll）。
   **判据、阈值、`jnt_solref`、`--walk`/HOLD 行为全未改**：`--mimic --mimic-clip dance/J_Dance0_StepTouch`
   仍如实报 1 处越限（exit 1），作为负结果保留；换一段不顶满限位的片段**不等于**「越限被修好了」，
