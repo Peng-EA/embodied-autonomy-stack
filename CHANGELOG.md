@@ -28,6 +28,12 @@
 
 ### Added
 
+- **仲裁顺序落码（P0）**：`sim/config.py` 新增 `PRIORITY` / `PRIORITY_ORDER`——六档固定优先级
+  （硬件急停 > L1 生存 > L2B 硬反射 > L3 用户 > L4 规划 > L2A 技能），**只定冲突归属、不含任何时延**。
+  新增 `checks/check-priority.mjs`：键集合一致、权重互异、降序与权威序一致、无负权重，
+  另与脚本内**外部硬编码**的一份权威序比对（防止用 config 证明 config 的恒真检查）。
+  已反向验证：对调 `l2b_reflex`/`l4_plan` 权重即 FAIL。纯新增——`--baseline full --duration 6` 仍 EXIT=0，
+  既有基线数字一个未动。
 - **演示台复位 + 摄像机提速（D2 / D4）**：服务端新增 `POST /reset`（只排队，`sim_loop` 在物理 tick 边界执行 keyframe+spawn 复位，
   清 cmd/模式/ramp，返回 `resetCount`），面板「复位」因此是真复位；`y<0.5` 时状态区出现"已摔倒"标记；
   新增 `probe-reset.mjs`（真撞摔倒 → 复位 → 2 s 内站起、回 spawn）。摄像机平移 `PAN` 0.20 → **0.80 m/s**（×4），

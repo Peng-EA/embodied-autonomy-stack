@@ -129,3 +129,30 @@ class RunConfig:
             "affect_modulating": self.affect_modulating,
             "need_generation": self.need_generation,
         }
+
+
+# ---------------------------------------------------------------- 仲裁优先级（P0）
+# 只定义"同时有效时谁赢"——**绝对不含任何时延/周期**：抢占多久生效、恢复等待多久，
+# 是另一张表的事，全部 TBD，不在这里出现。
+# 数值大者胜；只用于同时有效时的归属判定（哪些模块当前都"有效"，由各自的判据决定，
+# 不属于本表）。权重是**序数编码**（100/80/60/40/20/0 只为比较大小留空隙），
+# 不是物理量、也不是"优先级强度"。
+PRIORITY: dict[str, int] = {
+    "hardware_estop": 100,
+    "l1_survival": 80,
+    "l2b_reflex": 60,
+    "l3_user": 40,
+    "l4_plan": 20,
+    "l2a_skill": 0,
+}
+
+# 权威顺序固定，不许改：hardware_estop > l1_survival > l2b_reflex > l3_user > l4_plan > l2a_skill
+# 与 PRIORITY 按键权降序排出来的结果必须一致（checks/check-priority.mjs 会反向验红）。
+PRIORITY_ORDER: tuple[str, ...] = (
+    "hardware_estop",
+    "l1_survival",
+    "l2b_reflex",
+    "l3_user",
+    "l4_plan",
+    "l2a_skill",
+)
