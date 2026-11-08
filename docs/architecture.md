@@ -35,6 +35,8 @@
 - 唯一事实源：`sim/config.py` 的 `PRIORITY` / `PRIORITY_ORDER`（权重是序数编码，不是物理量）。
 - 断言：`cd checks && node check-priority.mjs`。脚本内另硬编码一份权威序，
   避免"拿 config 证明 config"的恒真检查。
+- 实现：`sim/priority.py`（`claim / release / tick / winner / snapshot`）。**2026-11-09 起各层已在登记，但仍不掌权**——
+  `winner()` 只打印，不参与任何控制分支。理由是顺序：先让"谁在抢"可见，再谈谁赢；掌权要单独一步、并配回归。
 - **为什么这张表不写时延**：L1 声称"最高抢占权"却又标 10–100 ms，而 L2B 硬反射要在 1–10 ms 内刹车——
   混写会让实现互相打架。层号是地址，时钟才是速度，两件事分开定。
 

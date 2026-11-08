@@ -30,6 +30,12 @@
 
 ### Added
 
+- **集中仲裁器（P3-1，只登记不掌权）**：新增 [`sim/priority.py`](sim/priority.py)（`claim/release/tick/winner/snapshot`）+
+  [`sim/test_priority.py`](sim/test_priority.py)（T1–T6 / 21 项）。优先级现查 `config.PRIORITY`，无数字副本；
+  未知 authority / `ttl<=0` / `t` 回退 / `winner()` 并列 一律 `ValueError`。
+  `sim/main.py` 在 L1 广播、L2 否决、L4 下目标三处登记，摘要多一行 `仲裁 winner=<x|none>（只读，不掌权）`。
+  **没有任何控制分支读它**：胶囊 10 s 与 G1 6 s 两条基线逐项不变（0.606 m/s / 2.958 m / z_min 0.7159 / 位移 1.143）。
+  反向验证：`tick()` 不清过期 → T3 红；`winner()` 取首个登记 → T2 红。
 - **记忆三件套接进 60 Hz 环（P2b2）**：`sim_server/app.py` 的物理 tick 末尾 `mem_sample()` 写 9 个寄存器 +
   push 一条元组；磁盘 IO 隔离到独立的 50 ms `flush_loop`（`.tmp/mem/telemetry-<pid>.jsonl`）。
   `/health` 增 `mem` 段（原 17 键未删）。实测：`probe-ws --seconds 60` → frames 3599、**dropped=0**、

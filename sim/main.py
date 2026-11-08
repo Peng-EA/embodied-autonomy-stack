@@ -51,6 +51,7 @@ from .l2_reflex.layer import ReflexControl
 from .l3_affect.layer import AffectMotivation
 from .l4_planning.layer import PlanningCoordinator
 from .l4_planning.mock_llm import MockLLMService
+from .priority import Registry
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -249,6 +250,11 @@ def main(argv: list[str] | None = None) -> int:
     arb_on = args.arbiter == "on"
     arbiter = Arbiter() if arb_on else None
     arb_events = 0
+    # ---- 集中仲裁器（P3-1）：只登记 + 摘要读一行，**不掌权** ---------------
+    # 每帧把各层"此刻声称自己在负责什么"记进来，摘要打一行 winner；
+    # 但下面所有控制分支都不读它（没有一个 if 依赖 winner），行为必须逐项不变。
+    # 真正掌权（用 winner 决定谁下发指令）留给后续切片——本切片只补"文档说假话"的登记层。
+    prio = Registry()
     escape_hold = (0.0, 0.0)   # 反射解除后仍沿「最后一次逃生方向」继续躲（方向记忆，非随机源）
 
     events: list[str] = []
@@ -293,6 +299,9 @@ def main(argv: list[str] | None = None) -> int:
         name = event or getattr(signal, "signal", "?")
         _count(layer, name, extra)
         now_s = clock() / 1000
+        # P3-1：L1 广播 battery_low 即登记生存优先（只登记；事件/回执一个字不改）
+        if layer == "L1" and name == "homeostatic_broadcast" and extra.get("need") == "battery_low":
+            prio.claim("l1_survival", 2.0, now_s, reason="battery_low")
         # 面板去抖：L1 是 20Hz 采样，全打出来会把事件流刷成一条河流。
         # 同一类事件 0.6s 内只显示一次（日志里仍然是完整的）。
         if now_s - _last_seen.get(name, -99) >= 0.6:
@@ -334,6 +343,8 @@ def main(argv: list[str] | None = None) -> int:
         t = step / C.CONTROL_HZ
         sim_ms["v"] = int(t * 1000)
         did = f"d{step:05d}"
+        # 每帧一次到期释放：只动登记表，不产生任何指令
+        prio.tick(t)
         if is_dyn:
             # 干扰体按绝对仿真时间摆位（与 test_vla_l4 同口径）：它没有动力学，位置就是时间的函数
             world.advance_intruder(t)
@@ -357,6 +368,8 @@ def main(argv: list[str] | None = None) -> int:
             l2.tick(t, clearance, force, escape_dir, l4.task, did)
             if l2.overrides > prev_overrides:
                 prev_overrides = l2.overrides
+                # P3-1：否决激活即登记反射优先（只登记；下面的跳转分支照旧只看 l2.active）
+                prio.claim("l2b_reflex", C.REFLECT_COOLDOWN, t, reason="reflex_override")
                 if not args.no_counterfactual:
                     cf = probe_without_override(world, prev_target)
                     cf_total += 1
@@ -373,6 +386,9 @@ def main(argv: list[str] | None = None) -> int:
         # ---- L4 决定往哪走
         target, scale = l4.tick(t, 1 / C.CONTROL_HZ, pos)
         prev_target = target
+        # P3-1：L4 下发目标即登记规划优先（每帧刷新 ttl=1.0；只登记，target 原样往下走）
+        if target is not None:
+            prio.claim("l4_plan", 1.0, t, reason="plan_target")
         # ---- 仲裁器（仅 --arbiter on）：w∈[0,1]=技能持权比例
         w = 1.0
         v_skill = 0.0
@@ -524,6 +540,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"L1 广播次数     {l1.broadcasts}")
     print(f"L2 否决次数     {l2.overrides}   真碰撞 {l2.collisions}")
     print(f"仲裁器事件数    {arb_events}  (--arbiter {args.arbiter})")
+    # P3-1：只读消费——winner 只出现在这一行，任何控制分支都不读它
+    _now = (steps - 1) / C.CONTROL_HZ if steps > 0 else 0.0
+    print(f"仲裁 winner=<{prio.winner(_now) or 'none'}>（只读，不掌权）")
     print(f"L4 规划请求     {l4.plans}   被中断 {l4.aborts}   降级={'YES' if l4.degraded else 'no'}")
     print(f"平均速度        {speed_sum / max(1, speed_n):.3f} m/s")
     if l4.decisions:
