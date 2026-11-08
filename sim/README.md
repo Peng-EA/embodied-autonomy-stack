@@ -82,7 +82,7 @@ sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈�
 | `l1_homeostasis/` | 电量/温度/应力 → `homeostatic_broadcast`（20Hz 采样） |
 | `l2_reflex/` | 射线间隙/接触力 → `reflex_override`（迟滞 + 冷却），**无许可、直接置位**；`arbiter.py` 是 L2A 技能 / L2B 反射共用一个执行器时的仲裁器（latched→确认窗→hold→ramp），自检 `python -m sim.test_arbiter` |
 | `l3_affect/` | 情绪向量 → `affect_vector`、`goal_candidate`，并**真的调制速度** |
-| `memory/` | 记忆三件套（2026-11-08）：`Registers`（L1 定长寄存器，写不分配）/ `Blackboard`（单写者快照，读不加锁）/ `Ring`（固定容量环形，覆盖最旧计 dropped）/ `Token`（frozen 只读令牌）。自检 `python -m sim.test_memory` |
+| `memory/` | 记忆三件套（2026-11-08）：`Registers`（L1 定长寄存器，写不分配）/ `Blackboard`（单写者快照，读不加锁）/ `Ring`（固定容量环形，覆盖最旧计 dropped）/ `Token`（frozen 只读令牌）。自检 `python -m sim.test_memory`；2026-11-09 起 `sim/main.py` 在 L4 **每次真下发目标**时 publish 一次（不是每帧），L1 只读一个 frozen 令牌，摘要多一行 `黑板 bb_seq=<n> token=…@seq=<n>` |
 | `priority.py` | 集中仲裁器（2026-11-09）：各层 `claim(authority, ttl)` 登记，`winner()` 现查 `PRIORITY` 取最高。**当前只登记不掌权**——只影响摘要里那行显示，没有任何控制分支读它。自检 `python -m sim.test_priority` |
 | `l4_planning/` | 异步调 LLM、执行航点、被抢占时挂起、断线时降级 |
 | `counterfactual.py` | 反事实推演：判断一次否决"该不该抢" |

@@ -30,6 +30,13 @@
 
 ### Added
 
+- **黑板接上业务（P2c）**：`sim/main.py` 在 L4 **每次真下发目标**（`target` 变了才发，不是每帧）时 `publish` 一次，
+  L1 侧只读一个 frozen `Token`；摘要新增 `黑板 bb_seq=<n> token=<waypoint>@seq=<n>`。**控制流零变化**：
+  改前后 d1 的 jsonl 事件流逐行 diff 为空（仅 meta 时间戳不同），全部基线指标逐项不变。
+  对齐判据：`bb_seq` 必须等于「真下发次数」——胶囊 10 s = **8**（4 条 plan_result + 4 条 waypoint 前移 − 0 条走完）、
+  G1 6 s = **3**；不把 `semantic_plan_request` 算作下发（r004 请求后 29 ms 就被 L1 挂起，目标从未下发）。
+  回归：`probe-ws --seconds 60` → frames 3599、dropped **0**、p95 **1.72 ms**、verdict pass。
+  反向验证：把 publish 挪成「每帧都发」→ `bb_seq=1000 ≠ 8`。
 - **G1 上的仲裁器实测（P1d）**：`--body g1 --baseline full --duration 30`，seed 7–11，`off`/`--arbiter on` 各 5 次（10/10 EXIT=0，时间基 10/10 PASS）。
   预注册判据：on 5/5 不摔 且 `min(z_min_on) ≥ min(z_min_off) − 0.02` → 结果 **on 0/5 摔、0.7105 ≥ 0.6900 → 判「G1 可切」**。
   **但默认仍是 off**：胶囊上 on 明显更差；seed 7 可复现地多一次否决（同点 5.210 s、同 clearance=0.22，位移 3.142→2.969），

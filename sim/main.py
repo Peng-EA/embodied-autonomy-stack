@@ -51,6 +51,7 @@ from .l2_reflex.layer import ReflexControl
 from .l3_affect.layer import AffectMotivation
 from .l4_planning.layer import PlanningCoordinator
 from .l4_planning.mock_llm import MockLLMService
+from .memory.store import Blackboard, Token
 from .priority import Registry
 
 REPO = Path(__file__).resolve().parent.parent
@@ -146,6 +147,15 @@ def escape_speed_command(escape_dir: tuple[float, float], has_push_channel: bool
         return 0.0, 0.0, "push"
     dx, dy = float(escape_dir[0]), float(escape_dir[1])
     return dx * speed, dy * speed, "velocity"
+
+
+def _l1_read_token(tok: Token) -> int:
+    """L1 侧对记忆的唯一读法：只翻令牌（seq），不读黑板、不写任何状态。
+
+    本切片只要求"L1 读得到"，不要求它用这个数去改行为——调用点把返回值丢掉，
+    控制分支一个字没动。将来真要让 L1 参考它，走的是这一个口子，而不是直接摸黑板。
+    """
+    return tok.seq
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -272,6 +282,14 @@ def main(argv: list[str] | None = None) -> int:
     llm = MockLLMService(seed=cfg.seed)
     l4 = PlanningCoordinator(bus, log, cfg, llm)
 
+    # ---- P2c·记忆三件套接线：黑板（慢环单写）+ 令牌（快环只读） -------------
+    # 只做"可观测的接线"：下面**没有任何控制分支读 bb / token**，行为必须逐项不变。
+    # 语义状态（任务进度）不放 L1：L1 只读 token；黑板由这里的慢环（L4 下发点）单写。
+    bb = Blackboard()
+    token = Token(skill_id="", phase="idle", seq=0)
+    bb_waypoint = "none"      # 最后一次 publish 的目标（写者侧状态，摘要展示用）
+    bb_publishes = 0          # 本进程 publish 次数；与黑板自身 seq 对账（不写进控制）
+
     # --arbiter on：把 L2 的离散否决换成仲裁器混合。off 时下面这条路一次都不走，
     # 原分支（含 push/速度档 0.4）保持逐字不变——它是别人判断「没被改坏」的基线。
     arb_on = args.arbiter == "on"
@@ -391,6 +409,9 @@ def main(argv: list[str] | None = None) -> int:
             # B0：没有稳态层，电量全靠外部脚本（这里就让它不掉）
             l1.battery = max(30.0, l1.battery - 0.02)
             sev = 0.0
+        # P2c：L1 侧读的**只有**这一张令牌（不读黑板、不拿它改任何判定）。
+        # 返回值故意丢弃：本切片只证明"读得到"，把记忆接进控制是后续切片的事。
+        _l1_read_token(token)
         if cfg.layers_enabled["l2"]:
             l2.tick(t, clearance, force, escape_dir, l4.task, did)
             if l2.overrides > prev_overrides:
@@ -412,6 +433,17 @@ def main(argv: list[str] | None = None) -> int:
 
         # ---- L4 决定往哪走
         target, scale = l4.tick(t, 1 / C.CONTROL_HZ, pos)
+        # P2c：只有"目标真的变了"才算一次下发（每帧发等于没有语义）。判据放在这里
+        # 而不是塞进 L4：本切片不许改 L4，也不许让黑板反向影响 target/scale。
+        # 注意仍用 prev_target 当"上一帧的值"——它本来就是上一帧的目标，语义没换。
+        if target is not None and target != prev_target:
+            bb_waypoint = f"({target[0]:+.2f},{target[1]:+.2f})"
+            bb_publishes += 1
+            bb_seq_pub = bb.publish({"waypoint": bb_waypoint,
+                                     "seq": bb_publishes, "t": round(t, 3)})
+            # frozen：刷新令牌只能新建一个；seq 取黑板刚发布的那一个（不另算）
+            token = Token(skill_id=str(l4.plan_goal or ""), phase=str(l4.task),
+                          seq=bb_seq_pub)
         prev_target = target
         # P3-1：L4 下发目标即登记规划优先（每帧刷新 ttl=1.0；只登记，target 原样往下走）
         if target is not None:
@@ -576,6 +608,9 @@ def main(argv: list[str] | None = None) -> int:
     _now = (steps - 1) / C.CONTROL_HZ if steps > 0 else 0.0
     print(f"仲裁 winner=<{prio.winner(_now) or 'none'}>（只读，不掌权）")
     print(f"L4 规划请求     {l4.plans}   被中断 {l4.aborts}   降级={'YES' if l4.degraded else 'no'}")
+    # P2c：记忆三件套接线（只读展示；bb_seq 取黑板自身 seq，不吃本地计数器）
+    _bseq, _bsnap = bb.read()
+    print(f"黑板 bb_seq={_bseq} token={bb_waypoint}@seq={token.seq}")
     print(f"平均速度        {speed_sum / max(1, speed_n):.3f} m/s")
     if l4.decisions:
         needs_txt = f"{needs_ratio:.2f}  (={l4.need_decisions}/{l4.decisions} 个决策)"
