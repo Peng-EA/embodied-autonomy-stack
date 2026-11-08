@@ -30,6 +30,16 @@
 
 ### Added
 
+- **清债 a：能力分叉提炼成函数（P3-2）**：`sim/main.py` 新增 `escape_speed_command(escape_dir, has_push_channel, speed=0.4)`，
+  有 push 通道 → `(0,0,"push")`（交回 world 用 `xfrc` 推底盘），没有 → 沿逃生方向给速度（`"velocity"`）。
+  **没有删**它——删除前提（L2 自改成速度层语义）未达成，删了 G1 会退回「反射一触发就永久冻结」。
+  新增 [`sim/test_capability.py`](sim/test_capability.py)（T1–T4 / 18 项，含真实 `G1World` 与胶囊 `World`）。
+  **行为逐位不变**：胶囊 0.606 m/s / 2.958 m、G1 z_min 0.7159 / 位移 1.143，改前后日志除时间戳外 diff 为空。
+  反向验证：函数恒返回 `"push"` → 6 条断言红。
+- **清债 b：`sim/requirements.txt` 补 G1/IK 依赖（P3-2）**：`mink` / `qpsolvers` / `osqp` / `scipy` + 阿里云镜像说明。
+  原来按 README 建新 venv 会在 `--body g1` 加载那步挂（今天已踩过一次）。
+- **清债 c：三处语义缺口从 `TBD` 改判为「G1 上不可用」（P3-2）**：`L1.charging` / `L3.hold_charge` / `L2.push`
+  缺的是物理对应物（没充电桩、人形没推底盘通道），不是缺标定值。它们只在胶囊上有效，G1 结论里不计入。
 - **集中仲裁器（P3-1，只登记不掌权）**：新增 [`sim/priority.py`](sim/priority.py)（`claim/release/tick/winner/snapshot`）+
   [`sim/test_priority.py`](sim/test_priority.py)（T1–T6 / 21 项）。优先级现查 `config.PRIORITY`，无数字副本；
   未知 authority / `ttl<=0` / `t` 回退 / `winner()` 并列 一律 `ValueError`。

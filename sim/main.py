@@ -25,7 +25,7 @@
 G1 上语义不成立的地方（如实打 TBD，不伪造信号）：L1 的 charging（房间里没有充电桩，
 只有 C.CHARGER_POS 那个地面点）、L3 由 charging 生的 hold_charge 动机、L2 的 push
 （人形没有"推底盘"通道，G1World 忽略并计数 push_ignored；本入口按能力把它接成
-"沿 L2 给的逃生方向后退"的速度命令，否则否决一人形就永久冻结——见下方 has_push_channel）。
+"沿 L2 给的逃生方向后退"的速度命令，否则否决一人形就永久冻结——见下方 escape_speed_command）。
 """
 
 from __future__ import annotations
@@ -119,6 +119,33 @@ def exit_code_for(*, fell: bool, dt_ok: bool) -> int:
     if fell or not dt_ok:
         return 1
     return 0
+
+
+def escape_speed_command(escape_dir: tuple[float, float], has_push_channel: bool,
+                         speed: float = 0.4) -> tuple[float, float, str]:
+    """L2 否决时的"逃生接线"：按身体能力分叉，返回 (vx, vy, path)。
+
+    这段分支原来直接内联在 main() 的 elif l2.active 里，只有跑起来才看得见。删掉
+    "没有 push 通道"那一支的前提是 L2 自己改成速度层语义——那个前提还没达成，
+    删了就是"反射一触发就永久冻结"的老坑。所以它留在这里，但变成有名有姓、能单测的
+    纯函数：改的是**可见性**，不是行为。
+
+    - has_push_channel=True：交回 world 层用 xfrc 推底盘 → 返回 (0, 0, "push")。
+      调用点仍用原样 drive_toward(pos, speed, push=escape_dir)：胶囊路径一位数字都不改。
+    - has_push_channel=False：沿 escape_dir × speed 给速度命令 → "velocity"。
+      escape_dir 退化（(0,0)）时返回精确 (0,0)，调用点照旧 brake()——与改前同一条路。
+
+    escape_dir 是**方向**（L2 给的单位向量），不是速度；speed 是速度档（默认 0.4，
+    与改前 drive_toward 的第二参数同一档）。speed 非正值或非有限一律 ValueError：
+    静默给一条 0 速度命令等于把否决变成冻结。
+    """
+    speed = float(speed)
+    if not math.isfinite(speed) or speed <= 0.0:
+        raise ValueError(f"escape speed 必须是有限正数，收到 {speed!r}")
+    if has_push_channel:
+        return 0.0, 0.0, "push"
+    dx, dy = float(escape_dir[0]), float(escape_dir[1])
+    return dx * speed, dy * speed, "velocity"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -433,7 +460,12 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 world.brake()
         elif l2.active:                      # 反射否决：先躲
-            if has_push_channel:
+            # 能力分叉在 escape_speed_command 里（有 push 通道 → 交回 world 推底盘；没有 → 速度层）。
+            # 下面两条 drive_toward 的参数逐字未改：速度分支仍拿 l2.push 当 1 m 偏移——换成
+            # vx/speed 会引入 1 ulp 的差，胶囊不受影响但人形的数会漂，而这一版要求行为零变化。
+            # 返回的 vx/vy 由 test_capability 与其它身体（真机速度层）消费，这里只用到 path。
+            _vx, _vy, escape_path = escape_speed_command(l2.push, has_push_channel)
+            if escape_path == "push":
                 world.drive_toward(pos, 0.4, push=l2.push)
             elif math.hypot(l2.push[0], l2.push[1]) > 1e-9:
                 # 人形：没有推力通道 → 沿逃生方向（push 的反方向由 L2 给）给速度命令。

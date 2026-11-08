@@ -1,3 +1,8 @@
+# 新机器装法：server/.venv/Scripts/python.exe -m pip install -r sim/requirements.txt
+# 本机默认源经代理会在 scipy 那个大 wheel 上反复断（实测卡在 ~16% 掉线），
+# 换阿里云镜像可一次装完（~24 s）：
+#   server/.venv/Scripts/python.exe -m pip install -r sim/requirements.txt \
+#       -i https://mirrors.aliyun.com/pypi/simple/
 # G1 仿真内核 sim/env/g1_sim.py 用的版本与 server/.venv 对齐（mujoco 4.0.0 是拆分包：
 # mujoco-core 必须一起装，否则 import 会报 core bindings missing）
 mujoco==4.0.0
@@ -7,3 +12,13 @@ numpy>=1.26
 pyyaml>=6.0
 # 探针（sim/test_vla_l4.py）调用 Ollama 用；主闭环不依赖它
 requests>=2.31
+
+# ---- G1 / IK 链路（sim/env/g1_modes.py 的 QP + IK）----
+# 缺任何一个都是"加载/进 IK 时挂"，不是跑起来才报：--body g1 走的就是这条路。
+#   mink      = IK/QP 求解器
+#   qpsolvers = QP 抽象层，osqp 是它默认后端
+#   scipy     = 数值依赖（也是上面提到的那个大 wheel，装它必须换镜像）
+mink>=0.3,<1.0
+qpsolvers>=3.0,<6
+osqp>=0.6.7,<2.0
+scipy>=1.11,<2.0
