@@ -1,7 +1,20 @@
 # G1 三件事 v2：用已验证的轮子重写
 
-> 状态：草案 · 最后更新 2026-11-07 · 面向：接手的新会话
-> 基线：`46144b0`。**本文件推翻 v1 的三处自研件**；v1 留在 git 历史：`git show 46144b0:docs/plan-g1-gait-ik-collision.md`。
+> 状态：草案 · 最后更新 2026-11-08 · 面向：接手的新会话
+> 基线：`46144b0`（计划写下时）。**本文件推翻 v1 的三处自研件**；v1 留在 git 历史：`git show 46144b0:docs/plan-g1-gait-ik-collision.md`。
+
+## 完成情况（2026-11-08 更新）
+
+| 包 | 状态 | 落在哪 | 复跑证据 |
+|---|---|---|---|
+| P0 服务端权威仿真 | **已做** | `sim_server/`、`sim/env/g1_sim.py`、WS `:8788/sim` | 站立 30 s 漂移 0.0002 m |
+| P1 场景单一真源 | **已做** | `sim/env/scene_room.json` → 浏览器与 sim_server 同源 | `room.boxes=8`、撞桌进 blocked |
+| P2a Mimic 动作库 | **已做** | `sim_server/policies/g1_mimic.py`（`bonus/B_HandsUp`） | 441 帧 / 8.816 s、回 HOLD 0.208 s |
+| P2b 走路 | **已做** | joystick ONNX 策略（playground 权重，非训练所得） | 30 s 0.5733 m/s、16.02 m、0 超限、未摔 |
+| P3 IK | **已做** | `sim_server/ik.py`（mink + osqp） | 末端 4.54 mm、solve p95 1.32 ms |
+
+逐条数字与命令见 [verification.md](verification.md)（2026-11-08 复跑表）。
+**注意**：P2b 用的权重是现成 joystick 策略，本仓库没有重训——"会走"成立，"训练质量"未验证。
 
 ## 0. 先认账：v1 有三处是自己造轮子
 

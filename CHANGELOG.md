@@ -9,6 +9,23 @@
 
 ## [Unreleased]
 
+### Verified — 2026-11-08 复跑
+
+> 只列今天在本机重跑、退出码 0 的项。口径与命令见 [docs/verification.md](docs/verification.md)。
+> 还没复跑的旧声明保留在原处，不在这里冒充已验证。
+
+- **静态**：`check-docs` / `check-layer-deps`（42 个 `.py`、0 处反向依赖）/ `validate-contracts` 全过。
+- **四层闭环跑真 G1**（`sim.main --body g1 --duration 6`）：z_min 0.7159 m（未摔）、净位移 1.143 m、
+  L4 3/3 返回无降级、抢占正确 1/1 误抢 0；`L1.charging` 等三处仍记 TBD。
+- **站立**（`selfcheck --seconds 30`）：漂移 **0.0002 m**、高 1.3222 m、tick 60.0 Hz。
+- **走路**（`selfcheck --walk`）：30 s 平均 **0.5733 m/s**、累计 **16.0157 m**、关节越限 0、未摔、
+  推理 p95 0.053 ms（n=2059）、`hold→policy→hold` 切换未摔。
+- **动作**（`selfcheck --mimic`，`bonus/B_HandsUp`）：441 帧 / 8.816 s、越限 0、回 HOLD 0.208 s、p95 0.056 ms。
+- **IK**（`selfcheck --ik`，`desk_cup`）：规划误差 2.92 mm、末端 **4.54 mm**、solve p95 **1.32 ms**、
+  触发到到位 0.580 s、越限 0、未摔。
+- **演示台**（`demo-check.mjs`）：布局 26/26 ×2 视口、摄像机 18/18、console 错误 0、`verdict=pass`；
+  拖滑杆后旁听 WS 实测 `speed_p50=0.528` / `max=0.753` m/s（非页面自证）；网格 35 块 / 393,270 三角 / 高 1.3424 m。
+
 ### Added
 
 - **演示台复位 + 摄像机提速（D2 / D4）**：服务端新增 `POST /reset`（只排队，`sim_loop` 在物理 tick 边界执行 keyframe+spawn 复位，

@@ -76,6 +76,34 @@ npm test         # 同 seed 两次运行必须同 stateHash
 
 细节、区间、局限与下一步：[evals/v0.2/README.md](evals/v0.2/README.md) · [docs/testbed.md](docs/testbed.md)。
 
+## G1：真身体 + 权威仿真（2026-11 新增）
+
+Testbed 现在有一条**真的人形**通路：Unitree G1（29-DOF，MuJoCo menagerie，BSD-3）在服务端 `sim_server` 里
+跑权威物理，浏览器只负责画。四层（L1–L4）通过同一份 `BodyCommand` / `BodyState` 驱动它，
+换身体（胶囊/鲸鱼娘 ↔ G1）不改上层代码。
+
+| 模式 | 谁在控 | 状态 |
+|---|---|---|
+| `HOLD` | 姿态保持（keyframe `stand`，kp=500） | 30 s 漂移 **0.0002 m** |
+| `POLICY` | joystick ONNX 速度跟踪策略，50 Hz | 30 s 平均 **0.5733 m/s**、累计 16.02 m、未摔 |
+| `MIMIC` | g1-moves 动捕片段策略（`bonus/B_HandsUp`） | 441 帧 / 8.816 s、回 HOLD 0.208 s |
+| `IK` | mink + osqp 解右手到杯点 | 末端 **4.54 mm**、solve p95 1.32 ms |
+
+```bash
+export TEMP=<repo>/.tmp TMP=<repo>/.tmp
+P=server/.venv/Scripts/python.exe
+$P -m sim_server.selfcheck --seconds 30     # 站立
+$P -m sim_server.selfcheck --walk --seconds 30   # 走路
+$P -m sim_server.selfcheck --mimic          # 动作片段
+$P -m sim_server.selfcheck --ik             # 伸手
+node testbed/scripts/serve-demo.mjs --port 5183  # 可视化演示台（面板可调）
+```
+
+边界：`POLICY` 用的是现成 joystick 权重（本仓库**没有重训**），所以"会走"成立、"训练质量"未验证；
+IK 是"伸手到点"，**不是抓取**；dance 那段越限是**保留的负结果**。
+完整说明：[sim_server/README.md](sim_server/README.md) · 演示台：[docs/testbed.md](docs/testbed.md) ·
+哪些结论今天真跑过：[docs/verification.md](docs/verification.md)。
+
 ## 想读哪一块
 
 - 这个项目到底主张什么 → [docs/vision.md](docs/vision.md)
@@ -86,6 +114,7 @@ npm test         # 同 seed 两次运行必须同 stateHash
 - 为什么这么决策 → [docs/adr/](docs/adr/)
 - 下一步做什么 → [docs/roadmap.md](docs/roadmap.md)
 - 长文观点 → [docs/blog/](docs/blog/)
+- 哪些结论是真跑过的、哪些只是文档声明 → [docs/verification.md](docs/verification.md)
 
 ## 文档站
 
@@ -128,7 +157,7 @@ $EDITOR docs/interfaces.md
 
 这些事**我们不做**，写出来是为了让"边界"可被引用：
 
-- 不做通用人形机器人整机
+- 不做通用人形机器人整机（用 G1 模型做研究，不等于造机器人）
 - 不做 LLM Agent 套壳
 - 不承诺 AGI
 - 不把情感做成聊天标签

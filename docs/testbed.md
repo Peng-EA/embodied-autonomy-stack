@@ -72,12 +72,16 @@ npm run dev                       # 打开 console.html，右上角「身体」�
 # console.html?body=capsule       # 强制用胶囊（没有 30 MB 模型时自动退回这一档）
 ```
 
-- **能动，但只是"滑行"**：底盘速度是注入的，腿保持站立姿势——没有步态、没有平衡控制器。
-  这是刻意的：先把 L4→身体的通路打通，再谈走路。
-- **关节通道已通但还没被 L4 使用**：`G1Body.setJoint(name, rad)` 可以直接给目标角，
-  接 IK 之后「去水杯那儿喝一口」才会变成 29 维目标角序列。
-- **场景是简化的**：MuJoCo 里只有地板 + 四面墙的包围盒；家具碰撞仍在 Rapier 那侧，
-  两套几何暂时没有互相同步（这是下一步，不是已完成）。
+上面这张表说的是**浏览器内 wasm 后端**（`g1-body.ts`，离线/降级用）：它确实是"滑行"——
+底盘速度注入、腿保持站立姿势，没有步态也没有平衡控制器。
+
+**要真走路得走服务端**：`sim_server` 的 POLICY 模式（joystick ONNX 策略）在 2026-11-08 复跑过，
+30 s 平均 **0.5733 m/s**、累计 16.0157 m、关节越限 0、未摔；伸手（mink IK）末端误差 4.54 mm。
+细节与命令见 [verification.md](verification.md) 与 [sim_server/README.md](../sim_server/README.md)。
+
+- **两条 G1 通路不要混着说**：`?sim=wasm` 是浏览器内滑行；WS 档接 `sim_server` 才有策略步态与 IK。
+- **场景**：家具碰撞已由 `sim/env/scene_room.json` 生成（P1），浏览器与 sim_server 同源；
+  旧说法"只有地板 + 四面墙"仅适用于 `?sim=wasm` 的离线档。
 - 模型许可：MuJoCo menagerie `unitree_g1`，BSD-3-Clause（派生自 `unitree_ros` 的 `g1_29dof_rev_1_0.xml`）。
 
 模型的分发边界见 `testbed/public/models/README.md`：
@@ -498,7 +502,8 @@ Ctrl+C 一起退（`--exit-after N` 是给脚本化验证用的，走同一条 s
 
 ## 下一步
 
-- G1 的下一步见 [plan-g1-gait-ik-collision.md](plan-g1-gait-ik-collision.md)（v2：服务端仿真 + ONNX 步态策略 + mink 求 IK，替换自研件）。
+- 哪些结论是今天真跑过的、哪些只是文档声明：[verification.md](verification.md)（每次发版重跑并改日期）。
+- G1 那条线的计划与完成情况：[plan-g1-gait-ik-collision.md](plan-g1-gait-ik-collision.md)（v2 计划；P0–P3 已完成，状态表见文首）。
 - `revalidate` 策略（"过期但当前感知仍然安全就采纳"）——这是本版阴性结果直接指向的修复。
 - 移动障碍场景（时间变化带来危险，而不只是目标移动）。
 - 抢占在 v0.2 场景里没有触发过一次（`b2` 与 `full` 数字完全相同），需要专门构造触发条件。
