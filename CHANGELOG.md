@@ -30,6 +30,11 @@
 
 ### Added
 
+- **G1 上的仲裁器实测（P1d）**：`--body g1 --baseline full --duration 30`，seed 7–11，`off`/`--arbiter on` 各 5 次（10/10 EXIT=0，时间基 10/10 PASS）。
+  预注册判据：on 5/5 不摔 且 `min(z_min_on) ≥ min(z_min_off) − 0.02` → 结果 **on 0/5 摔、0.7105 ≥ 0.6900 → 判「G1 可切」**。
+  **但默认仍是 off**：胶囊上 on 明显更差；seed 7 可复现地多一次否决（同点 5.210 s、同 clearance=0.22，位移 3.142→2.969），
+  行为分叉是真的；且 0.8 s 尾段是未标定值，切开等于把没标定的东西设成默认。切权排到常数标定之后。
+  回归：`--stop-abrupt --trials 5` 仍 **0/5** 摔（z_min 0.7253）、`--legacy-handover --trials 5` 仍 **5/5** 摔（z_min 0.0398）。
 - **清债 a：能力分叉提炼成函数（P3-2）**：`sim/main.py` 新增 `escape_speed_command(escape_dir, has_push_channel, speed=0.4)`，
   有 push 通道 → `(0,0,"push")`（交回 world 用 `xfrc` 推底盘），没有 → 沿逃生方向给速度（`"velocity"`）。
   **没有删**它——删除前提（L2 自改成速度层语义）未达成，删了 G1 会退回「反射一触发就永久冻结」。
