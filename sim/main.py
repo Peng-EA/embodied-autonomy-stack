@@ -46,6 +46,7 @@ from .counterfactual import probe_without_override
 from .dashboard import render
 from .env.world import World
 from .l1_homeostasis.layer import Homeostasis
+from .l2_reflex.arbiter import Arbiter
 from .l2_reflex.layer import ReflexControl
 from .l3_affect.layer import AffectMotivation
 from .l4_planning.layer import PlanningCoordinator
@@ -120,6 +121,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--scene", default="stage1", choices=list(SCENE_CHOICES),
                     help="stage1=静态房间（默认）；dyn=带 mocap 干扰体的动态场景"
                          "（只有胶囊版；--body g1 时 exit 2，不静默降级）")
+    ap.add_argument("--arbiter", choices=["off", "on"], default="off",
+                    help="off=默认，L2 否决是离散全权（原有代码路径，一行不改）；"
+                         "on=L2 否决改走 l2_reflex.arbiter 混合（锁存→确认窗→hold→ramp）")
     ap.add_argument("--duration", type=float, default=C.DURATION_S)
     ap.add_argument("--llm-disconnect", type=float, default=None,
                     help="在第 N 秒切断 LLM（检验降级路径）")
@@ -185,6 +189,7 @@ def main(argv: list[str] | None = None) -> int:
         "preemption_enabled": cfg.preemption_enabled,
         "clearance_mode": C.CLEARANCE_MODE,
         "counterfactual": not args.no_counterfactual,
+        "arbiter": args.arbiter,
         "affect_modulating": cfg.affect_modulating,
         "baseline_file": cfg.baseline_file,
         "baseline_sha256": cfg.baseline_sha256,
@@ -227,6 +232,13 @@ def main(argv: list[str] | None = None) -> int:
     l3 = AffectMotivation(bus, log, cfg)
     llm = MockLLMService(seed=cfg.seed)
     l4 = PlanningCoordinator(bus, log, cfg, llm)
+
+    # --arbiter on：把 L2 的离散否决换成仲裁器混合。off 时下面这条路一次都不走，
+    # 原分支（含 push/速度档 0.4）保持逐字不变——它是别人判断「没被改坏」的基线。
+    arb_on = args.arbiter == "on"
+    arbiter = Arbiter() if arb_on else None
+    arb_events = 0
+    escape_hold = (0.0, 0.0)   # 反射解除后仍沿「最后一次逃生方向」继续躲（方向记忆，非随机源）
 
     events: list[str] = []
     orig_emit = bus.emit
@@ -350,8 +362,49 @@ def main(argv: list[str] | None = None) -> int:
         # ---- L4 决定往哪走
         target, scale = l4.tick(t, 1 / C.CONTROL_HZ, pos)
         prev_target = target
+        # ---- 仲裁器（仅 --arbiter on）：w∈[0,1]=技能持权比例
+        w = 1.0
+        v_skill = 0.0
+        if arb_on:
+            if l2.active:
+                n = math.hypot(l2.push[0], l2.push[1])
+                if n > 1e-9:
+                    escape_hold = (l2.push[0] / n, l2.push[1] / n)
+            if target is not None and not charging:
+                mod = l3.speed_modulation() if cfg.layers_enabled["l3"] else 1.0
+                v_skill = scale * mod      # 该帧技能本来会下发的速度命令
+            w, _st, _ev = arbiter.apply(t, skill_cmd=1.0, reflex_active=l2.active,
+                                        reflex_limit=0.0)
+            if _ev is not None:
+                arb_events += 1
+
         if charging:                         # 已经在桩上：停住，别把桩顶出接触力
             world.brake()
+        elif arb_on and w >= 1.0:
+            # w=1（idle）: 与 off 的技能分支同一表达式、同一个目标点——
+            # 不然改的就不只是「反射怎么交还」，连巡逻/去桩的驱动也一起换了（见 world.drive_toward：
+            # v_des=min(KP*dist, MAX_SPEED*scale)，换目标点会换掉速度）。
+            if target is not None:
+                world.drive_toward(target, v_skill)
+            else:
+                world.brake()
+        elif arb_on:
+            # 速度 = (1-w)*v_reflex + w*v_skill：v_reflex=0.4 沿最后逃生方向（沿用 0.4 档），
+            # v_skill=该帧原命令；同向时即题设的标量式，异向时按矢量混合（ramp 两端都连续）。
+            vx = (1.0 - w) * 0.4 * escape_hold[0]
+            vy = (1.0 - w) * 0.4 * escape_hold[1]
+            if target is not None and v_skill > 0.0:
+                dx, dy = target[0] - pos[0], target[1] - pos[1]
+                d = math.hypot(dx, dy)
+                if d > 1e-9:
+                    vx += w * v_skill * dx / d
+                    vy += w * v_skill * dy / d
+            sp = math.hypot(vx, vy)
+            if sp > 1e-9:
+                # 目标点取 1 m 外：只为让 v_des 打到饱和值，不是新判据（与 g1 逃生分支同法）
+                world.drive_toward((pos[0] + vx / sp, pos[1] + vy / sp), sp)
+            else:
+                world.brake()
         elif l2.active:                      # 反射否决：先躲
             if has_push_channel:
                 world.drive_toward(pos, 0.4, push=l2.push)
@@ -459,6 +512,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"最终电量        {l1.battery:.1f}%   充电完成={'是' if charging else '否'}{charge_note}")
     print(f"L1 广播次数     {l1.broadcasts}")
     print(f"L2 否决次数     {l2.overrides}   真碰撞 {l2.collisions}")
+    print(f"仲裁器事件数    {arb_events}  (--arbiter {args.arbiter})")
     print(f"L4 规划请求     {l4.plans}   被中断 {l4.aborts}   降级={'YES' if l4.degraded else 'no'}")
     print(f"平均速度        {speed_sum / max(1, speed_n):.3f} m/s")
     print(f"需求驱动占比    {needs_ratio:.2f}  (={l4.need_decisions}/{l4.decisions} 个决策)")
@@ -494,6 +548,9 @@ def main(argv: list[str] | None = None) -> int:
                   f" / {cfg.duration_s:.2f}s）被判成「在充电」→ L1 电量回升、机器人站住不动；"
                   f"TBD：没有物理依据（只是靠近 C.CHARGER_POS）")
         print("语义不成立      L1.charging / L3 hold_charge / L2.push —— 三处记 TBD，未伪造信号")
+    if not is_g1:
+        print(f"净位移          {disp:.3f} m  (起点 {pos_start[0]:+.2f},{pos_start[1]:+.2f}"
+              f" → 终点 {pos_end[0]:+.2f},{pos_end[1]:+.2f}；直线距离，不是路径长)")
     if is_dyn and precision is not None:
         print(f"抢占正确率      TBD（dyn 场景：world.py 的 clone() 只搬 qpos/qvel/time，不搬 mocap_pos，"
               f"反事实推演里干扰体停在原点；已发生 {cf_total} 次否决，这个比例不采信）")

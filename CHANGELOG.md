@@ -15,8 +15,10 @@
 > 还没复跑的旧声明保留在原处，不在这里冒充已验证。
 
 - **静态**：`check-docs` / `check-layer-deps`（42 个 `.py`、0 处反向依赖）/ `validate-contracts` 全过。
-- **四层闭环跑真 G1**（`sim.main --body g1 --duration 6`）：z_min 0.7159 m（未摔）、净位移 1.143 m、
-  L4 3/3 返回无降级、抢占正确 1/1 误抢 0；`L1.charging` 等三处仍记 TBD。
+- **四层闭环跑真 G1**（`sim.main --body g1 --duration 6`，解释器 `server/.venv`）：z_min 0.7159 m（未摔）、
+  净位移 1.143 m、L4 3/3 返回无降级、抢占正确 1/1 误抢 0；`L1.charging` 等三处仍记 TBD。
+  **退出码是 1，不是 0**：6 s 窗口里 `l4.decisions=0`（人形大部分时间站着），而 `main()` 的判据是
+  `return 0 if l4.decisions else 1`。这条判据本身是缺陷——"没发生决策"被当成"跑挂了"，待修。
 - **站立**（`selfcheck --seconds 30`）：漂移 **0.0002 m**、高 1.3222 m、tick 60.0 Hz。
 - **走路**（`selfcheck --walk`）：30 s 平均 **0.5733 m/s**、累计 **16.0157 m**、关节越限 0、未摔、
   推理 p95 0.053 ms（n=2059）、`hold→policy→hold` 切换未摔。
@@ -28,6 +30,14 @@
 
 ### Added
 
+- **L2 仲裁器接线（P1b，开关默认关）**：`sim/main.py` 新增 `--arbiter {off,on}`。`off` 走**原来的离散否决代码路径**
+  （胶囊基线逐项不变：否决 1 / 碰撞 0 / 抢占 1.00 (1/1) / 需求 0.50 (2/4) / 0.606 m/s）；`on` 由
+  `l2_reflex/arbiter.py` 算"技能持权比例"并混合速度。10 s A/B（n=1，同 seed）：
+  净位移 2.958 → 2.956 m，平均速度 0.606 → 0.657 m/s，电量 **30.5% → 20.1%**。
+  差值是"每次否决多退 0.6 s + ramp 0.5 s ≈ 1.1 s、到桩晚 1 s、少充这 1 s"，
+  **不是更耗能**（`BATTERY_CHARGE=9.0 %/s` × 1.1 s ≈ 10 pp，实测差 10.4 pp）。**故不设默认**；
+  该 1.1 s 由三个未标定常数（0.30 / 0.30 / 0.50 s）算出，没扫过也没有 n≥5。
+  另：胶囊摘要补「净位移」一行（原先只有 G1 打，A/B 对比时该格是 `N/A`）。
 - **L2 仲裁器（P1a，未接线）**：新增 [`sim/l2_reflex/arbiter.py`](sim/l2_reflex/arbiter.py) +
   [`sim/test_arbiter.py`](sim/test_arbiter.py)（5 组 / 205 checks，纯 stdlib，无 pytest）。
   把"锁存 → 解除确认窗 → 保持 → 斜坡恢复"固化成状态机：反射消失**不等于**交还持权，

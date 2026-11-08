@@ -45,8 +45,14 @@ sim/.venv/Scripts/python -m sim.main --body g1 --duration 30     # 换人形 G1�
 sim/.venv/Scripts/python -m sim.main --body g1 --baseline g1-full --duration 30 --no-render   # 人形基线（n>=5 报分布）
 sim/.venv/Scripts/python -m sim.main --scene dyn                 # 胶囊 + mocap 干扰体（DynWorld）
 sim/.venv/Scripts/python -m sim.main --body g1 --scene dyn       # exit 2：不兼容，不静默降级
+sim/.venv/Scripts/python -m sim.main --baseline full --arbiter on   # L2 仲裁器接管否决（默认 off）
 sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈值
 ```
+
+> **解释器别拿错**：本机 `sim/.venv` 只有胶囊需要的包，而且它那份 mujoco 是 **3.17.0** 的旧枚举；
+> `--body g1` 要 mink / onnxruntime / scipy，实测只有 `server/.venv`（mujoco 4.0.0）齐。
+> 上面两条 G1 命令请把 `sim/.venv/Scripts/python` 换成 `server/.venv/Scripts/python`。
+> 两个 venv 并存是待收拾的债，见 `.pm/DECISIONS.md`。
 
 ## 目录
 
@@ -61,7 +67,7 @@ sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈�
 | `env/g1_modes.py` | HOLD/POLICY/MIMIC/IK 状态机（含 P5 的刹车三段式）。2026-11-08 从 `sim_server/` 搬到这（`g1_ik` / `g1_mimic` 一起搬，`sim_server` 改成 import）——**状态机只有这一份，不许复制** |
 | `env/g1_ik.py` · `env/g1_mimic.py` | `g1_modes` 的两个动作后端（mink IK / mimic ONNX），随状态机一起搬 |
 | `l1_homeostasis/` | 电量/温度/应力 → `homeostatic_broadcast`（20Hz 采样） |
-| `l2_reflex/` | 射线间隙/接触力 → `reflex_override`（迟滞 + 冷却），**无许可、直接置位** |
+| `l2_reflex/` | 射线间隙/接触力 → `reflex_override`（迟滞 + 冷却），**无许可、直接置位**；`arbiter.py` 是 L2A 技能 / L2B 反射共用一个执行器时的仲裁器（latched→确认窗→hold→ramp），自检 `python -m sim.test_arbiter` |
 | `l3_affect/` | 情绪向量 → `affect_vector`、`goal_candidate`，并**真的调制速度** |
 | `l4_planning/` | 异步调 LLM、执行航点、被抢占时挂起、断线时降级 |
 | `counterfactual.py` | 反事实推演：判断一次否决"该不该抢" |
@@ -128,6 +134,29 @@ G1 的房间来自 `g1.xml` + `scene_room.json`，没有会动的东西）。`--
 **一个必须知道的数值性质**：30 s 步行对初始坐标**浮点敏感**——只把出生点挪 1e-9 m，`walk_30s` 就从 0.5711 变成 0.5752 m/s。
 同一初始点连跑两次仍逐位相同（已验证），所以它是确定性的、但不是"抗扰动"的。这意味着：**基线里的 30 s 步行数字必须报 n≥5 的分布**，
 不能拿单次数值跟别的版本逐位对比，更不能因为差 0.002 m/s 就说"性能变了"。
+### `--arbiter on`：L2 仲裁器接管反射否决（2026-11-08 · n=1，10 s）
+
+默认 `off` 走**原来的离散否决代码路径**（不是新代码碰巧算出一样的结果）；`on` 时改由
+`l2_reflex/arbiter.py` 算"技能持权比例" w：速度 = (1−w)·0.4·逃生方向 + w·技能速度，
+反射解除后要先过确认窗、再过保持窗，才把持权交回技能。
+
+同一命令（`--baseline full --duration 10 --no-render`，同 seed、同航点）：
+
+| 指标 | `off` | `on` |
+|---|---|---|
+| L2 否决 / 真碰撞 | 1 / 0 | 1 / 0 |
+| 抢占正确率 | 1.00 (1/1) | 1.00 (1/1) |
+| 需求驱动占比 | 0.50 (2/4) | 0.50 (2/4) |
+| 净位移 | 2.958 m | 2.956 m |
+| 平均速度 | 0.606 m/s | 0.657 m/s |
+| 最终电量 | **30.5%** | **20.1%** |
+| 仲裁器事件 | 0 | 4 |
+
+**负结果（如实记）**：`on` 每次否决后多退 0.6 s + ramp 0.5 s ≈ **1.1 s**，到桩晚约 1 s；
+`BATTERY_CHARGE=9.0 %/s` × 1.1 s ≈ 10 个百分点——那 10.4 pp 的电量差就是**少充的这 1 s**，
+不是"更费电"。这两件事别混。
+所以它**还不配当默认**：1.1 s 由三个未标定常数算出，没扫过、也没有 n≥5。
+
 ### S3：`g1-full` 基线（2026-11-08）
 
 `--baseline g1-full` 是**人形上的「什么也不关」**：开关与 `full` 逐项相同，区别有两个——
@@ -137,8 +166,9 @@ G1 的房间来自 `g1.xml` + `scene_room.json`，没有会动的东西）。`--
 为什么 n≥5 要分两段口径，见 [ADR-0008](../docs/adr/0008-g1-full-baseline.md)。
 
 G1 摘要新增一行「净位移」：起点到终点的**直线距离**，不是路径长。人形 30 s 里约一半时间站在
-「桩位」上不动，拿「平均速度 × 时长」当位移会把站着不动算成走过路。这行只对 `--body g1` 打印，
-胶囊路径的输出一个字没变。
+「桩位」上不动，拿「平均速度 × 时长」当位移会把站着不动算成走过路。原先这行只对 `--body g1` 打印；
+2026-11-08（P1b）起胶囊摘要也打这一行——A/B 对比时它是 `N/A`，等于少了一个判据。除新增这一行外，
+胶囊旧输出的字段逐项未变。
 
 实测 n=5（seed 7–11，含逐次值与日志 sha256）：[evals/g1-full/README.md](../evals/g1-full/README.md)；
 口径：[docs/evaluation.md](../docs/evaluation.md) 的「G1-full」一节。
