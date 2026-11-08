@@ -30,6 +30,16 @@
 - **演示台**（`demo-check.mjs`）：布局 26/26 ×2 视口、摄像机 18/18、console 错误 0、`verdict=pass`；
   拖滑杆后旁听 WS 实测 `speed_p50=0.528` / `max=0.753` m/s（非页面自证）；网格 35 块 / 393,270 三角 / 高 1.3424 m。
 
+### Fixed
+
+- **假 PASS 修正：MIMIC 自检的观察窗（P3-g1）**：`--mimic` 原来在 `mode.mimic_done`（alpha 归零，t≈10.12 s）就收窗，
+  而 B_HandsUp 的摔倒最低点 0.0650 出现在 **t≈11.04 s**——观察窗把摔倒整段截掉了，于是长期报 `z_min=0.7766 PASS`。
+  现在循环会看满 `MIMIC_POST_S = 3.0 s`（退场后 3 s），判据阈值一个没动：`--mimic` 由 **PASS 变 FAIL**（EXIT=0→1），
+  `--mimic-candidates` 由 1 红变 2 红（B_HandsUp 也红；B_HandsChop 仍 PASS、J_Dance0 仍为既有负结果）。
+  新增字段 `post_exit_min_z` / `fell_after_exit`；`return_to_hold_s` 语义不变（仍 0.208 s）。
+  **这不是回归，是把一直存在的摔倒从窗外搬进窗内**（机制见 [ADR-0009](docs/adr/0009-action-exit-settle.md)）。
+  同步更正：`CHANGELOG` 旧「七项全绿」、`sim_server/README` 的 P2a 三项与候选表、`docs/testbed.md` 候选表、`docs/safety.md` 的机制描述。
+
 ### Added
 
 - **动作退场复现 + ADR-0009（P3-f，代码零改动）**：在外部脚本里压掉/拉长 MIMIC 退场 ramp 并**观察退场后 3 s**，

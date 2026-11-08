@@ -116,6 +116,8 @@ STOP_SPEED_EPS = 0.05        # 「停住」口径（任务书 P5：|v|<0.05 m/s 
 MIMIC_FELL_Z = 0.5          # 与 --walk 同一个「摔」口径：pelvis z ≤ 0.5
 MIMIC_RETURN_MAX_S = 2.0    # 播完 ≤2 s 回 HOLD
 MIMIC_MAX_SIM_S = 120.0     # 兜底：正常约 39 s，走不完说明卡住了
+MIMIC_POST_S = 3.0          # 观察窗：退场后再看 3 s（ADR-0009 决策 3「观察窗延长到退场 + 3 s」；
+                            # 这是**测量变更**，不是判据——MIMIC_FELL_Z / 越限一个数都不动）
 
 # ---- P3 --ik 判据（任务书原文，一个数都别动）----
 IK_END_ERR_MAX = 0.01        # 末端误差 ≤0.01 m
@@ -569,7 +571,9 @@ def _mimic_episode(args: argparse.Namespace, clip: str | None) -> dict[str, Any]
     - frames     实际喂给策略的最后一个参考帧号 + 1（整段 = 该 clip 的参考帧数）
     - duration_s 从「开始播」到「最后一帧播完」的仿真秒数（每控制帧 +1 帧 = 50 帧/秒）
     - return_to_hold_s  从退场开始到 alpha 归零（真正回到 HOLD 稳态）的仿真秒数
-    - fell       全程 pelvis z ≤ 0.5（与 --walk 同一个口径）
+    - fell       全程 pelvis z ≤ 0.5（与 --walk 同一个口径）；"全程"含退场后 MIMIC_POST_S 秒
+    - post_exit_min_z / fell_after_exit  退场（alpha 归零）后 MIMIC_POST_S 秒窗内的最低 pelvis z
+                与是否摔（ADR-0009 决策 3：窗口必须在交接之后仍然开着，否则摔在窗外＝假 PASS）
     - infer_p95_ms  只统计 MIMIC 自己的推理（POLICY 的样本不混进来）
 
     clip=None 走注册表默认值；不认识 / 权重不对一律抛 MimicModelError，不拿别的片段顶替。
@@ -597,6 +601,8 @@ def _mimic_episode(args: argparse.Namespace, clip: str | None) -> dict[str, Any]
     t_play_start: float | None = None
     t_play_end: float | None = None
     t_hold: float | None = None
+    t_exit: float | None = None
+    post_exit_min_z = float("nan")
     ctrl_frames = 0
 
     while world.data.time < MIMIC_MAX_SIM_S:
@@ -605,6 +611,11 @@ def _mimic_episode(args: argparse.Namespace, clip: str | None) -> dict[str, Any]
         z = float(world.data.qpos[2])
         z_min = min(z_min, z)
         z_max = max(z_max, z)
+
+        # 退场后窗口：alpha 归零之后继续累计最低点（摔常发生在交接后 1 s 量级）
+        if mode.mimic_done:
+            t_exit = float(world.data.time) if t_exit is None else t_exit
+            post_exit_min_z = z if post_exit_min_z != post_exit_min_z else min(post_exit_min_z, z)
 
         v, names = _joint_violations(world)
         if v > viol_max:
@@ -626,7 +637,9 @@ def _mimic_episode(args: argparse.Namespace, clip: str | None) -> dict[str, Any]
         if mode.mimic_done:
             if t_hold is None:
                 t_hold = float(world.data.time)
-            break
+            # 不在这里立刻 break：先看完退场后 MIMIC_POST_S 秒，再收窗
+            if t_exit is not None and float(world.data.time) - t_exit >= MIMIC_POST_S:
+                break
 
     fell = bool(z_min <= MIMIC_FELL_Z)
     duration_s = (t_play_end - t_play_start) if (t_play_start is not None and t_play_end is not None) else float("nan")
@@ -649,6 +662,10 @@ def _mimic_episode(args: argparse.Namespace, clip: str | None) -> dict[str, Any]
         "z_min": z_min,
         "z_max": z_max,
         "fell": fell,
+        "post_exit_min_z": post_exit_min_z,
+        "fell_after_exit": bool(
+            post_exit_min_z == post_exit_min_z and post_exit_min_z <= MIMIC_FELL_Z
+        ),
         "return_s": return_s,
         "p95": p95,
         "nan": nan,
@@ -712,6 +729,10 @@ def _run_mimic(args: argparse.Namespace) -> int:
         + (f" {m['viol_names'][:3]}" if m["viol_names"] else "")
     )
     print(f"z_min={m['z_min']:.4f}")
+    print(
+        f"post-exit 观察 {MIMIC_POST_S:.1f} s：min_z={m['post_exit_min_z']:.4f} "
+        f"fell_after_exit={m['fell_after_exit']}"
+    )
     print(f"fell={m['fell']}")
     print(f"return_to_hold_s={m['return_s']:.3f}" if m["return_s"] == m["return_s"]
           else "return_to_hold_s=n/a")
