@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 from .. import config as C
 
@@ -74,12 +75,42 @@ def _clamp(value: float, limit: float) -> float:
     return value
 
 
+def _env_seconds(name: str, default: float) -> float:
+    """读一次环境变量覆盖（仅标定用）。未设置 → **原样返回 default**（同一个 float
+    字面量，逐 bit 相同），所以"不设环境变量"的运行与加这个口子之前完全等价。
+
+    设了但值不合法（非实数 / 非有限 / 负数）→ ValueError，不静默退回默认值：
+    标定脚本要是写错了变量名或单位，退回默认值会让一整轮扫描跑出"看起来正常"的假数。
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} 必须是实数秒，拿到 {raw!r}") from None
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError(f"{name} 必须是有限非负秒数，拿到 {raw!r}")
+    return value
+
+
+# ---- 标定用的环境变量覆盖（P3-e）--------------------------------------------
+# ARB_RELEASE_CONFIRM_S / ARB_HOLD_S / ARB_RESUME_RAMP_S
+# **仅 sim/scan_arbiter.py 这类标定脚本使用，不是产品开关**：默认值才是产品行为，
+# 本文件不因这三个变量改变默认值。import 时读一次，进程内不变（跑到一半换参数
+# 会让"同一组数"跨两个协议，比读不准更糟）。
+_ARB_RELEASE_CONFIRM_S = _env_seconds("ARB_RELEASE_CONFIRM_S", 0.30)
+_ARB_HOLD_S = _env_seconds("ARB_HOLD_S", 0.30)
+_ARB_RESUME_RAMP_S = _env_seconds("ARB_RESUME_RAMP_S", 0.50)
+
+
 class Arbiter:
     """把"锁存—保持—斜坡恢复"固化成可测状态机（纯 stdlib，无第三方依赖）。"""
 
-    RELEASE_CONFIRM_S = 0.30  # 起点值，未标定：反射必须"连续消失"这么久才允许交还持权
-    HOLD_S = 0.30             # 起点值，未标定：确认之后的保持窗（此间仍归反射）
-    RESUME_RAMP_S = 0.50      # 起点值，未标定：技能权重 0→1 的恢复斜坡
+    # 默认值逐位不变（0.30 / 0.30 / 0.50）；未设环境变量时下面三行就是那三个字面量。
+    RELEASE_CONFIRM_S = _ARB_RELEASE_CONFIRM_S  # 起点值，未标定：反射必须"连续消失"这么久才允许交还持权
+    HOLD_S = _ARB_HOLD_S                        # 起点值，未标定：确认之后的保持窗（此间仍归反射）
+    RESUME_RAMP_S = _ARB_RESUME_RAMP_S          # 起点值，未标定：技能权重 0→1 的恢复斜坡
     # 三者语义不同，故各自独立：调"确认窗"不该顺手改到"保持窗"。
     # 默认同值只是当下没有标定依据，不代表它们必须相等。
 
