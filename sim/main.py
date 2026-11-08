@@ -109,6 +109,17 @@ def _git_commit() -> str:
         return "unknown"
 
 
+# 退出码语义（全仓唯一判据，别在别处再抄一套）：
+#   0 = 跑到时长结束，且时间基 PASS、未摔；"这 6 s 没发生决策" 不算失败，仍记 0。
+#   1 = 摔了（fell），或时间基 FAIL（dt 相对误差超过 DT_TOL）。
+#   2 = 参数/能力错误，只由 main() 里既有的早退路径 sys.exit(2) 产生，本函数不返回 2。
+def exit_code_for(*, fell: bool, dt_ok: bool) -> int:
+    """本次运行该返回什么退出码；纯函数，不读世界状态，便于单测与外部脚本引用。"""
+    if fell or not dt_ok:
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="EA Stack · 阶段 1 最小闭环")
     ap.add_argument("--baseline", default="full",
@@ -515,7 +526,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"仲裁器事件数    {arb_events}  (--arbiter {args.arbiter})")
     print(f"L4 规划请求     {l4.plans}   被中断 {l4.aborts}   降级={'YES' if l4.degraded else 'no'}")
     print(f"平均速度        {speed_sum / max(1, speed_n):.3f} m/s")
-    print(f"需求驱动占比    {needs_ratio:.2f}  (={l4.need_decisions}/{l4.decisions} 个决策)")
+    if l4.decisions:
+        needs_txt = f"{needs_ratio:.2f}  (={l4.need_decisions}/{l4.decisions} 个决策)"
+    else:
+        needs_txt = "N/A（0/0 个决策）"      # 铁律 2：分母为 0 打 N/A，不用 0.00 顶替
+    print(f"需求驱动占比    {needs_txt}")
     if is_g1:
         causes = counts["l1_cause"]
         fell = z_min <= fell_z
@@ -567,7 +582,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"日志            {log.path}")
     print(f"元数据          {log.meta_path}")
     print("=" * 78)
-    return 0 if l4.decisions else 1
+    # 胶囊/dyn 路径没有 z_min 这个概念 → fell 恒 False，与改前行为一致，不新造判据
+    return exit_code_for(
+        fell=bool(z_min <= fell_z) if is_g1 else False,
+        dt_ok=dt_worst <= DT_TOL,
+    )
 
 
 if __name__ == "__main__":

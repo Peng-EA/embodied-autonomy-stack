@@ -53,6 +53,19 @@ sim/.venv/Scripts/python -m sim.calibrate                 # 重新标定 L2 阈�
 > `--body g1` 要 mink / onnxruntime / scipy，实测只有 `server/.venv`（mujoco 4.0.0）齐。
 > 上面两条 G1 命令请把 `sim/.venv/Scripts/python` 换成 `server/.venv/Scripts/python`。
 > 两个 venv 并存是待收拾的债，见 `.pm/DECISIONS.md`。
+### 退出码
+
+| 码 | 含义 |
+|---|---|
+| 0 | 跑完 + 时间基 PASS + 未摔 |
+| 1 | 摔了（**仅人形**判 `z_min <= FELL_Z`）或时间基误差超 `DT_TOL` |
+| 2 | 参数 / 能力错误（`--body g1 --scene dyn`、时间基混配等） |
+
+判死逻辑是纯函数 `exit_code_for(*, fell, dt_ok)`，不依赖世界状态，可直接单测：
+`python -c "from sim.main import exit_code_for as f; print(f(fell=True, dt_ok=True))"` → `1`。
+2026-11-08（P1c）之前是 `return 0 if l4.decisions else 1` —— 人形站着不动（`decisions=0`）
+就会被判成"跑挂了"，一条完全正常的 6 s 运行退出码是 1。顺带修了 `需求驱动占比 0.00 (=0/0)`，
+现在分母为 0 打 `N/A`（仓库铁律第 2 条）。
 
 ## 目录
 

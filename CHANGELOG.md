@@ -17,8 +17,8 @@
 - **静态**：`check-docs` / `check-layer-deps`（42 个 `.py`、0 处反向依赖）/ `validate-contracts` 全过。
 - **四层闭环跑真 G1**（`sim.main --body g1 --duration 6`，解释器 `server/.venv`）：z_min 0.7159 m（未摔）、
   净位移 1.143 m、L4 3/3 返回无降级、抢占正确 1/1 误抢 0；`L1.charging` 等三处仍记 TBD。
-  **退出码是 1，不是 0**：6 s 窗口里 `l4.decisions=0`（人形大部分时间站着），而 `main()` 的判据是
-  `return 0 if l4.decisions else 1`。这条判据本身是缺陷——"没发生决策"被当成"跑挂了"，待修。
+  改为 **EXIT=0**（P1c 修了判据）。修之前这条命令的退出码是 **1**：旧判据是 `return 0 if l4.decisions else 1`，
+  而人形 6 s 里 `decisions=0`（大半时间站在桩位上）——"没发生决策"被当成"跑挂了"。
 - **站立**（`selfcheck --seconds 30`）：漂移 **0.0002 m**、高 1.3222 m、tick 60.0 Hz。
 - **走路**（`selfcheck --walk`）：30 s 平均 **0.5733 m/s**、累计 **16.0157 m**、关节越限 0、未摔、
   推理 p95 0.053 ms（n=2059）、`hold→policy→hold` 切换未摔。
@@ -30,6 +30,13 @@
 
 ### Added
 
+- **退出码语义修对（P1c）**：`sim/main.py` 抽纯函数 `exit_code_for(*, fell, dt_ok)`——0 = 跑完且时间基 PASS 且未摔；
+  1 = 摔了或时间基 FAIL；2 仍归参数/能力错误。**旧判据 `return 0 if l4.decisions else 1` 是错的**：
+  人形 6 s 里大部分时间站着（`decisions=0`），于是一条完全正常的运行退出码为 1（实测既存，非新引入）。
+  同批修 `需求驱动占比 0.00 (=0/0)` → `N/A（0/0 个决策）`（仓库铁律第 2 条：分母为 0 不许用 0 顶替）。
+  改后复跑：`--body g1 --duration 6` **EXIT=0**、z_min 0.7159 / 位移 1.143 / plans=3 逐项不变；
+  `--baseline full --duration 10` EXIT=0 且 否决 1 / 碰撞 0 / 抢占 1.00 / 需求 0.50 / 0.606 m/s 逐项不变；
+  `--arbiter on` 电量仍 20.1%（没"顺手变好"）。
 - **L2 仲裁器接线（P1b，开关默认关）**：`sim/main.py` 新增 `--arbiter {off,on}`。`off` 走**原来的离散否决代码路径**
   （胶囊基线逐项不变：否决 1 / 碰撞 0 / 抢占 1.00 (1/1) / 需求 0.50 (2/4) / 0.606 m/s）；`on` 由
   `l2_reflex/arbiter.py` 算"技能持权比例"并混合速度。10 s A/B（n=1，同 seed）：
